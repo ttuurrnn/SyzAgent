@@ -1,0 +1,12 @@
+{
+	"target": "linux/amd64",
+	"sshkey": "/home/ai/syzdirect-runtime/cve/cve_cve_2025_68205/image-work/bullseye.id_rsa",
+	"procs": 8,
+	"type": "qemu",
+	"vm": {
+		"count": 1,
+		"cpu": 2,
+		"mem": 4096
+	},
+	"reproduce": false
+}

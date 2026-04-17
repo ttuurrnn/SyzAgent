@@ -1,0 +1,29 @@
+[
+  {
+    "id": "io_uring_sqpoll_tctx_setup_failure",
+    "match_any": [
+      "WARNING: ODEBUG bug in io_sq_offload_create",
+      "free active (active state 1) object",
+      "io_sq_offload_create"
+    ],
+    "notes": "Known io_uring sqpoll setup failure bug fixed upstream."
+  },
+  {
+    "id": "gfs2_drop_inode_s_fs_info",
+    "match_any": [
+      "KASAN: null-ptr-deref Read in gfs2_drop_inode",
+      "gfs2_drop_inode",
+      "gfs2: Don't clear sb->s_fs_info in gfs2_sys_fs_add"
+    ],
+    "notes": "Known GFS2 mount-time null deref fixed upstream."
+  },
+  {
+    "id": "memfd_secret_refcount_warning",
+    "match_any": [
+      "WARNING: refcount bug in sys_memfd_secret",
+      "refcount_t: addition on 0",
+      "sys_memfd_secret"
+    ],
+    "notes": "Persistent refcount warning in memfd_secret unrelated to scheduling/qdisc targets. Fires on nearly every fuzzing session in this kernel image."
+  }
+]

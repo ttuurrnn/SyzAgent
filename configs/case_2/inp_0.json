@@ -1,0 +1,10 @@
+[
+  {
+    "Target": "sendmsg",
+    "Relate": [
+      "accept",
+      "accept4",
+      "socket"
+    ]
+  }
+]

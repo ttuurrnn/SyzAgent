@@ -1,0 +1,9 @@
+[
+  {
+    "Target": "ioctl$IOCTL_VMCI_QUEUEPAIR_ALLOC",
+    "Relate": [
+      "open",
+      "openat"
+    ]
+  }
+]

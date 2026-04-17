@@ -1,0 +1,62 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.ko
+*.bc
+*.ll
+
+# Logs
+*.pid
+*.exit
+
+# Large binaries
+*.vmlinux
+*.img
+*.gz
+*.tar
+*.zip
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.py[codz]
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+
+# Local runtime / dependencies
+.runtime/
+deps/
+
+# Generated experiment artifacts
+logs/
+runs/
+results/
+B*_crashes/
+*.qcow2
+bzImage
+vmlinux
+
+# LLVM source
+source/llvm-project-*/
+source/llvm-project-new
+source/llvm-project-*.tar.xz
+
+# SyzDirect build outputs
+source/syzdirect/syzdirect_function_model/build/
+source/syzdirect/syzdirect_fuzzer/bin/
+source/syzdirect/syzdirect_fuzzer/linux_amd64/
+source/syzdirect/syzdirect_kernel_analysis/build/
+
+# Runtime / generated data
+source/syzdirect/Runner/workdir/
+source/syzdirect/Runner/fresh_runs/
+source/syzdirect/Runner/test_runs/
+source/syzdirect/Runner/bg_logs/
+workdir/
+bug_report_*.md

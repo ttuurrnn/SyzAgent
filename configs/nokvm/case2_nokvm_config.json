@@ -1,0 +1,20 @@
+{
+	"target": "linux/amd64",
+	"http": "0.0.0.0:56742",
+	"workdir": "/work/syzdirect_workdir/fuzzres/case_2/xidx_0/run0",
+	"kernel_obj": "/work/syzdirect_workdir/instrumented/case_2",
+	"image": "/work/images/bullseye.img",
+	"sshkey": "/tmp/bullseye_ai.id_rsa",
+	"syzkaller": "/work/SyzDirect/source/syzdirect/syzdirect_fuzzer",
+	"procs": 2,
+	"type": "qemu",
+	"hitindex": 0,
+	"reproduce": false,
+	"vm": {
+		"count": 1,
+		"kernel": "/work/syzdirect_workdir/instrumented/case_2/bzImage_nokvm",
+		"cpu": 2,
+		"mem": 2048,
+		"qemu_args": "-cpu Haswell-noTSX-IBRS"
+	}
+}

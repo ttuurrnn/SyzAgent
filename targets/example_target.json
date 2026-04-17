@@ -1,0 +1,10 @@
+{
+    "target_id": "example_bug_001",
+    "kernel_commit": "v6.1",
+    "file_path": "net/core/sock.c",
+    "function": "sock_setsockopt",
+    "line": 1234,
+    "target_type": "bug_repro",
+    "description": "Example target for testing the pipeline",
+    "notes": "This is a template - replace with actual target location"
+}

@@ -1,0 +1,455 @@
+--- a/llvm/include/llvm/Transforms/Instrumentation.h
++++ b/llvm/include/llvm/Transforms/Instrumentation.h
+@@ -152,6 +152,12 @@
+   bool TraceStores = false;
+   bool CollectControlFlow = false;
+ 
++  // SyzDirect: distance-guided fuzzing options
++  int CompileTime = 1;
++  std::string KernelSrcDir;
++  std::string DistanceDir;
++  std::string TargetFunction;
++
+   SanitizerCoverageOptions() = default;
+ };
+ 
+--- a/clang/include/clang/Driver/Options.td
++++ b/clang/include/clang/Driver/Options.td
+@@ -2242,6 +2242,24 @@
+     HelpText<"Disable sanitizer coverage instrumentation for modules and functions "
+              "that match the provided special case list, even the allowed ones">,
+     MarshallingInfoStringVector<CodeGenOpts<"SanitizeCoverageIgnorelistFiles">>;
++// SyzDirect: distance-guided fuzzing options
++def fsanitize_coverage_kernel_src_dir : Joined<["-"], "fsanitize-coverage-kernel-src-dir=">,
++    Group<f_clang_Group>, Visibility<[ClangOption, CC1Option, CLOption]>,
++    HelpText<"Kernel source directory for sanitizer coverage">,
++    MarshallingInfoString<CodeGenOpts<"CoverageKernelSrcDir">>;
++def fsanitize_coverage_target_function : Joined<["-"], "fsanitize-coverage-target-function=">,
++    Group<f_clang_Group>, Visibility<[ClangOption, CC1Option, CLOption]>,
++    HelpText<"Target function for distance-guided sanitizer coverage">,
++    MarshallingInfoString<CodeGenOpts<"CoverageTargetFunction">>;
++def fsanitize_coverage_distance_dir : Joined<["-"], "fsanitize-coverage-distance-dir=">,
++    Group<f_clang_Group>, Visibility<[ClangOption, CC1Option, CLOption]>,
++    HelpText<"Directory containing distance information files (.dist)">,
++    MarshallingInfoString<CodeGenOpts<"CoverageDistanceDir">>;
++def fsanitize_coverage_compile_time : Joined<["-"], "fsanitize-coverage-compile-time=">,
++    Group<f_clang_Group>, Visibility<[ClangOption, CC1Option, CLOption]>,
++    HelpText<"Compile time mode for sanitizer coverage (1 or 2)">,
++    MarshallingInfoInt<CodeGenOpts<"SanitizeCoverageCompileTime">, "1">;
++
+ def fexperimental_sanitize_metadata_EQ : CommaJoined<["-"], "fexperimental-sanitize-metadata=">,
+   Group<f_Group>,
+   HelpText<"Specify the type of metadata to emit for binary analysis sanitizers">;
+--- a/clang/include/clang/Driver/SanitizerArgs.h
++++ b/clang/include/clang/Driver/SanitizerArgs.h
+@@ -32,6 +32,10 @@
+   std::vector<std::string> CoverageIgnorelistFiles;
+   std::vector<std::string> BinaryMetadataIgnorelistFiles;
+   int CoverageFeatures = 0;
++  // SyzDirect: distance-guided fuzzing
++  std::string TargetFunction;
++  std::string DistanceDir;
++  std::string KernelSrcDir;
+   int BinaryMetadataFeatures = 0;
+   int MsanTrackOrigins = 0;
+   bool MsanUseAfterDtor = true;
+--- a/clang/lib/Driver/SanitizerArgs.cpp
++++ b/clang/lib/Driver/SanitizerArgs.cpp
+@@ -99,6 +99,8 @@
+   CoverageTraceLoads = 1 << 16,
+   CoverageTraceStores = 1 << 17,
+   CoverageControlFlow = 1 << 18,
++  CoverageFirst = 1 << 19,
++  CoverageSecond = 1 << 20,
+ };
+ 
+ enum BinaryMetadataFeature {
+@@ -874,6 +876,26 @@
+         DiagnoseErrors);
+   }
+ 
++  // SyzDirect: parse distance-guided fuzzing options
++  for (const auto *Arg :
++       Args.filtered(options::OPT_fsanitize_coverage_kernel_src_dir,
++                     options::OPT_fsanitize_coverage_target_function,
++                     options::OPT_fsanitize_coverage_distance_dir,
++                     options::OPT_fsanitize_coverage_compile_time)) {
++    if (Arg->getOption().matches(options::OPT_fsanitize_coverage_kernel_src_dir)) {
++      Arg->claim();
++      KernelSrcDir = Arg->getValue(0);
++    } else if (Arg->getOption().matches(options::OPT_fsanitize_coverage_target_function)) {
++      Arg->claim();
++      TargetFunction = Arg->getValue(0);
++    } else if (Arg->getOption().matches(options::OPT_fsanitize_coverage_distance_dir)) {
++      Arg->claim();
++      DistanceDir = Arg->getValue(0);
++    } else if (Arg->getOption().matches(options::OPT_fsanitize_coverage_compile_time)) {
++      Arg->claim();
++    }
++  }
++
+   // Parse -f(no-)?sanitize-metadata.
+   for (const auto *Arg :
+        Args.filtered(options::OPT_fexperimental_sanitize_metadata_EQ,
+@@ -1157,7 +1179,9 @@
+       std::make_pair(CoverageStackDepth, "-fsanitize-coverage-stack-depth"),
+       std::make_pair(CoverageTraceLoads, "-fsanitize-coverage-trace-loads"),
+       std::make_pair(CoverageTraceStores, "-fsanitize-coverage-trace-stores"),
+-      std::make_pair(CoverageControlFlow, "-fsanitize-coverage-control-flow")};
++      std::make_pair(CoverageControlFlow, "-fsanitize-coverage-control-flow"),
++      std::make_pair(CoverageFirst, "-fsanitize-coverage-compile-time=1"),
++      std::make_pair(CoverageSecond, "-fsanitize-coverage-compile-time=2")};
+   for (auto F : CoverageFlags) {
+     if (CoverageFeatures & F.first)
+       CmdArgs.push_back(F.second);
+@@ -1167,6 +1191,14 @@
+   addSpecialCaseListOpt(Args, CmdArgs, "-fsanitize-coverage-ignorelist=",
+                         CoverageIgnorelistFiles);
+ 
++  // SyzDirect: pass distance-guided fuzzing options to backend
++  if (!KernelSrcDir.empty())
++    CmdArgs.push_back(Args.MakeArgString("-fsanitize-coverage-kernel-src-dir=" + KernelSrcDir));
++  if (!TargetFunction.empty())
++    CmdArgs.push_back(Args.MakeArgString("-fsanitize-coverage-target-function=" + TargetFunction));
++  if (!DistanceDir.empty())
++    CmdArgs.push_back(Args.MakeArgString("-fsanitize-coverage-distance-dir=" + DistanceDir));
++
+   if (!GPUSanitize) {
+     // Translate available BinaryMetadataFeatures to corresponding clang-cc1
+     // flags. Does not depend on any other sanitizers. Unsupported on GPUs.
+@@ -1437,6 +1469,8 @@
+                 .Case("trace-loads", CoverageTraceLoads)
+                 .Case("trace-stores", CoverageTraceStores)
+                 .Case("control-flow", CoverageControlFlow)
++                .Case("first", CoverageFirst)
++                .Case("second", CoverageSecond)
+                 .Default(0);
+     if (F == 0 && DiagnoseErrors)
+       D.Diag(clang::diag::err_drv_unsupported_option_argument)
+--- a/clang/include/clang/Basic/CodeGenOptions.h
++++ b/clang/include/clang/Basic/CodeGenOptions.h
+@@ -428,6 +428,11 @@
+   /// coverage pass should actually not be instrumented.
+   std::vector<std::string> SanitizeCoverageIgnorelistFiles;
+ 
++  // SyzDirect: distance-guided fuzzing options
++  std::string CoverageKernelSrcDir;
++  std::string CoverageDistanceDir;
++  std::string CoverageTargetFunction;
++
+   /// Path to ignorelist file specifying which objects
+   /// (files, functions) listed for instrumentation by sanitizer
+   /// binary metadata pass should not be instrumented.
+--- a/clang/include/clang/Basic/CodeGenOptions.def
++++ b/clang/include/clang/Basic/CodeGenOptions.def
+@@ -286,6 +286,7 @@
+ CODEGENOPT(SanitizeCoverageStackDepth, 1, 0) ///< Enable max stack depth tracing
+ CODEGENOPT(SanitizeCoverageTraceLoads, 1, 0) ///< Enable tracing of loads.
+ CODEGENOPT(SanitizeCoverageTraceStores, 1, 0) ///< Enable tracing of stores.
++CODEGENOPT(SanitizeCoverageCompileTime, 2, 1) ///< SyzDirect compile time mode.
+ CODEGENOPT(SanitizeBinaryMetadataCovered, 1, 0) ///< Emit PCs for covered functions.
+ CODEGENOPT(SanitizeBinaryMetadataAtomics, 1, 0) ///< Emit PCs for atomic operations.
+ CODEGENOPT(SanitizeBinaryMetadataUAR, 1, 0) ///< Emit PCs for start of functions
+--- a/clang/lib/CodeGen/BackendUtil.cpp
++++ b/clang/lib/CodeGen/BackendUtil.cpp
+@@ -240,6 +240,11 @@
+   Opts.TraceLoads = CGOpts.SanitizeCoverageTraceLoads;
+   Opts.TraceStores = CGOpts.SanitizeCoverageTraceStores;
+   Opts.CollectControlFlow = CGOpts.SanitizeCoverageControlFlow;
++  // SyzDirect: distance-guided fuzzing options
++  Opts.KernelSrcDir = CGOpts.CoverageKernelSrcDir;
++  Opts.DistanceDir = CGOpts.CoverageDistanceDir;
++  Opts.TargetFunction = CGOpts.CoverageTargetFunction;
++  Opts.CompileTime = CGOpts.SanitizeCoverageCompileTime;
+   return Opts;
+ }
+ 
+--- a/llvm/lib/Transforms/Instrumentation/SanitizerCoverage.cpp
++++ b/llvm/lib/Transforms/Instrumentation/SanitizerCoverage.cpp
+@@ -13,6 +13,7 @@
+ #include "llvm/Transforms/Instrumentation/SanitizerCoverage.h"
+ #include "llvm/ADT/ArrayRef.h"
+ #include "llvm/ADT/SmallVector.h"
++#include "llvm/ADT/StringExtras.h"
+ #include "llvm/Analysis/GlobalsModRef.h"
+ #include "llvm/Analysis/PostDominators.h"
+ #include "llvm/IR/Constant.h"
+@@ -28,8 +29,11 @@
+ #include "llvm/IR/Module.h"
+ #include "llvm/IR/Type.h"
+ #include "llvm/Support/CommandLine.h"
++#include "llvm/Support/FileSystem.h"
+ #include "llvm/Support/SpecialCaseList.h"
+ #include "llvm/Support/VirtualFileSystem.h"
++#include <fstream>
++#include <map>
+ #include "llvm/TargetParser/Triple.h"
+ #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+ #include "llvm/Transforms/Utils/ModuleUtils.h"
+@@ -203,6 +207,26 @@
+   return Options;
+ }
+ 
++void strip(std::string &str) {
++  if  (str.length() != 0) {
++    auto w = std::string(" ");
++    auto n = std::string("\n");
++    auto r = std::string("\t");
++    auto t = std::string("\r");
++    auto z = std::string("\x00");
++    auto v = std::string(1 ,str.front());
++    while((v == w) || (v==t) || (v==r) || (v==n) || (v==z)) {
++        str.erase(str.begin());
++        v = std::string(1 ,str.front());
++    }
++    v = std::string(1 , str.back());
++    while((v ==w) || (v==t) || (v==r) || (v==n) || (v==z)) {
++        str.erase(str.end() - 1 );
++        v = std::string(1 , str.back());
++    }
++  }
++}
++
+ using DomTreeCallback = function_ref<const DominatorTree *(Function &F)>;
+ using PostDomTreeCallback =
+     function_ref<const PostDominatorTree *(Function &F)>;
+@@ -214,14 +238,18 @@
+       const SpecialCaseList *Allowlist = nullptr,
+       const SpecialCaseList *Blocklist = nullptr)
+       : Options(OverrideFromCL(Options)), Allowlist(Allowlist),
+-        Blocklist(Blocklist) {}
++        Blocklist(Blocklist) {
++    loadDistanceInfo();
++  }
+   bool instrumentModule(Module &M, DomTreeCallback DTCallback,
+                         PostDomTreeCallback PDTCallback);
+ 
+ private:
++  void loadDistanceInfo();
+   void createFunctionControlFlow(Function &F);
+   void instrumentFunction(Function &F, DomTreeCallback DTCallback,
+-                          PostDomTreeCallback PDTCallback);
++                          PostDomTreeCallback PDTCallback,
++                          std::map<std::string, std::map<unsigned int, unsigned int>> &blockDistanceInfoModule);
+   void InjectCoverageForIndirectCalls(Function &F,
+                                       ArrayRef<Instruction *> IndirCalls);
+   void InjectTraceForCmp(Function &F, ArrayRef<Instruction *> CmpTraceTargets);
+@@ -234,6 +262,7 @@
+   void InjectTraceForSwitch(Function &F,
+                             ArrayRef<Instruction *> SwitchTraceTargets);
+   bool InjectCoverage(Function &F, ArrayRef<BasicBlock *> AllBlocks,
++                      DenseMap<BasicBlock *, unsigned int> &block2Distance,
+                       bool IsLeafFunc = true);
+   GlobalVariable *CreateFunctionLocalArrayInSection(size_t NumElements,
+                                                     Function &F, Type *Ty,
+@@ -241,6 +270,7 @@
+   GlobalVariable *CreatePCArray(Function &F, ArrayRef<BasicBlock *> AllBlocks);
+   void CreateFunctionLocalArrays(Function &F, ArrayRef<BasicBlock *> AllBlocks);
+   void InjectCoverageAtBlock(Function &F, BasicBlock &BB, size_t Idx,
++                             unsigned int distance,
+                              bool IsLeafFunc = true);
+   Function *CreateInitCallsForSections(Module &M, const char *CtorName,
+                                        const char *InitFunctionName, Type *Ty,
+@@ -253,6 +283,7 @@
+   std::string getSectionEnd(const std::string &Section) const;
+   FunctionCallee SanCovTracePCIndir;
+   FunctionCallee SanCovTracePC, SanCovTracePCGuard;
++  FunctionCallee SanCovMarkBlock; // SyzDirect: kcov_mark_block(u32 distance)
+   std::array<FunctionCallee, 4> SanCovTraceCmpFunction;
+   std::array<FunctionCallee, 4> SanCovTraceConstCmpFunction;
+   std::array<FunctionCallee, 5> SanCovLoadFunction;
+@@ -278,11 +309,55 @@
+ 
+   SanitizerCoverageOptions Options;
+ 
++  // SyzDirect: distance info loaded from .dist files
++  std::map<std::string, std::map<std::string, std::map<unsigned int, unsigned int>>> BlockDistanceInfo;
++
+   const SpecialCaseList *Allowlist;
+   const SpecialCaseList *Blocklist;
+ };
+ } // namespace
+ 
++void ModuleSanitizerCoverage::loadDistanceInfo() {
++  StringRef DistanceDir = StringRef(Options.DistanceDir);
++  if (DistanceDir.empty())
++    return;
++  std::error_code EC;
++  for (auto It = sys::fs::directory_iterator(DistanceDir, EC),
++          End = sys::fs::directory_iterator();
++      !EC && It != End; It.increment(EC)) {
++    StringRef filePath = It->path();
++    if(sys::fs::is_regular_file(filePath) && filePath.ends_with(".dist")) {
++      StringRef relatePathSig = filePath.substr(DistanceDir.size(), filePath.size()-DistanceDir.size()-5);
++      if (relatePathSig.starts_with("/")) {
++        relatePathSig = relatePathSig.substr(1);
++      }
++      std::string line;
++      StringRef lineStrRef;
++      std::ifstream distanceFile(filePath.str());
++      if (distanceFile.is_open()) {
++        while (!distanceFile.eof()) {
++          std::getline(distanceFile, line);
++          strip(line);
++          if (line.empty()) continue;
++          lineStrRef = StringRef(line);
++          SmallVector<StringRef> splitRes;
++          SplitString(lineStrRef, splitRes, " ");
++          if (splitRes.size() != 3) {
++            errs() << "split error when parsing distance files" << "\n";
++            exit(-1);
++          }
++          StringRef funcName = splitRes[0];
++          unsigned int blockIdx = std::stoi(splitRes[1].str());
++          unsigned int blockDistance = std::stoi(splitRes[2].str());
++          std::string relatePathSigStr = relatePathSig.str();
++          std::string funcNameStr = funcName.str();
++          BlockDistanceInfo[relatePathSigStr][funcNameStr][blockIdx] = blockDistance;
++        }
++      }
++    }
++  }
++}
++
+ PreservedAnalyses SanitizerCoveragePass::run(Module &M,
+                                              ModuleAnalysisManager &MAM) {
+   ModuleSanitizerCoverage ModuleSancov(Options, Allowlist.get(),
+@@ -367,6 +442,37 @@
+ 
+ bool ModuleSanitizerCoverage::instrumentModule(
+     Module &M, DomTreeCallback DTCallback, PostDomTreeCallback PDTCallback) {
++  StringRef relatePathSig;
++  std::map<std::string, std::map<unsigned int, unsigned int>> blockDistanceInfoModule;
++  if (Options.CompileTime == 2) {
++    StringRef moduleSrcPath = StringRef(M.getSourceFileName());
++    StringRef kernelSrcPath = StringRef(Options.KernelSrcDir);
++    if (moduleSrcPath.starts_with(kernelSrcPath)) {
++      if (kernelSrcPath.ends_with("/")) {
++        relatePathSig = moduleSrcPath.substr(kernelSrcPath.size());
++      } else {
++        relatePathSig = moduleSrcPath.substr(kernelSrcPath.size() + 1);
++      }
++    } else {
++      relatePathSig = moduleSrcPath;
++    }
++    std::pair<StringRef, StringRef> resStr = relatePathSig.rsplit(".");
++    if(resStr.first==relatePathSig && resStr.second==""){
++      errs() << "module path error! (no dot found in path)" << "\n";
++      errs() << moduleSrcPath << "\n";
++      errs() << kernelSrcPath << "\n";
++      exit(-1);
++    }
++    std::string tmpStr = resStr.first.str();
++    for (unsigned i = 0; i < tmpStr.size(); i++) {
++      if (tmpStr[i] == '/') {
++        tmpStr[i] = '-';
++      }
++    }
++    std::string relatePathSigStr(tmpStr);
++    blockDistanceInfoModule = BlockDistanceInfo[relatePathSigStr];
++  }
++
+   if (Options.CoverageType == SanitizerCoverageOptions::SCK_None)
+     return false;
+   if (Allowlist &&
+@@ -475,11 +581,13 @@
+     SanCovLowestStack->setInitializer(Constant::getAllOnesValue(IntptrTy));
+ 
+   SanCovTracePC = M.getOrInsertFunction(SanCovTracePCName, VoidTy);
++  if (Options.CompileTime == 2)
++    SanCovMarkBlock = M.getOrInsertFunction("kcov_mark_block", VoidTy, Int32Ty);
+   SanCovTracePCGuard =
+       M.getOrInsertFunction(SanCovTracePCGuardName, VoidTy, PtrTy);
+ 
+   for (auto &F : M)
+-    instrumentFunction(F, DTCallback, PDTCallback);
++    instrumentFunction(F, DTCallback, PDTCallback, blockDistanceInfoModule);
+ 
+   Function *Ctor = nullptr;
+ 
+@@ -600,7 +708,8 @@
+ }
+ 
+ void ModuleSanitizerCoverage::instrumentFunction(
+-    Function &F, DomTreeCallback DTCallback, PostDomTreeCallback PDTCallback) {
++    Function &F, DomTreeCallback DTCallback, PostDomTreeCallback PDTCallback,
++    std::map<std::string, std::map<unsigned int, unsigned int>> &blockDistanceInfoModule) {
+   if (F.empty())
+     return;
+   if (F.getName().contains(".module_ctor"))
+@@ -640,12 +749,20 @@
+   SmallVector<LoadInst *, 8> Loads;
+   SmallVector<StoreInst *, 8> Stores;
+ 
++  DenseMap<BasicBlock *, unsigned int> block2Distance;
++
+   const DominatorTree *DT = DTCallback(F);
+   const PostDominatorTree *PDT = PDTCallback(F);
+   bool IsLeafFunc = true;
+ 
++  std::map<unsigned int, unsigned int> blockDistanceInfoFunction = blockDistanceInfoModule[F.getName().str()];
++  int blockIdx = 0;
++
+   for (auto &BB : F) {
+-    if (shouldInstrumentBlock(F, &BB, DT, PDT, Options))
++    if (blockDistanceInfoFunction.count(blockIdx) != 0) {
++      block2Distance[&BB] = blockDistanceInfoFunction[blockIdx];
++    }
++    if (F.getName().str() == Options.TargetFunction || shouldInstrumentBlock(F, &BB, DT, PDT, Options))
+       BlocksToInstrument.push_back(&BB);
+     for (auto &Inst : BB) {
+       if (Options.IndirectCalls) {
+@@ -679,12 +796,13 @@
+             (isa<CallInst>(Inst) && !isa<IntrinsicInst>(Inst)))
+           IsLeafFunc = false;
+     }
++    blockIdx += 1;
+   }
+ 
+   if (Options.CollectControlFlow)
+     createFunctionControlFlow(F);
+ 
+-  InjectCoverage(F, BlocksToInstrument, IsLeafFunc);
++  InjectCoverage(F, BlocksToInstrument, block2Distance, IsLeafFunc);
+   InjectCoverageForIndirectCalls(F, IndirCalls);
+   InjectTraceForCmp(F, CmpTraceTargets);
+   InjectTraceForSwitch(F, SwitchTraceTargets);
+@@ -770,11 +888,17 @@
+ 
+ bool ModuleSanitizerCoverage::InjectCoverage(Function &F,
+                                              ArrayRef<BasicBlock *> AllBlocks,
++                                             DenseMap<BasicBlock *, unsigned int> &block2Distance,
+                                              bool IsLeafFunc) {
+   if (AllBlocks.empty()) return false;
+   CreateFunctionLocalArrays(F, AllBlocks);
+-  for (size_t i = 0, N = AllBlocks.size(); i < N; i++)
+-    InjectCoverageAtBlock(F, *AllBlocks[i], i, IsLeafFunc);
++  for (size_t i = 0, N = AllBlocks.size(); i < N; i++) {
++    unsigned int distance = (unsigned int)-1;
++    if (block2Distance.count(AllBlocks[i]) != 0) {
++      distance = block2Distance[AllBlocks[i]];
++    }
++    InjectCoverageAtBlock(F, *AllBlocks[i], i, distance, IsLeafFunc);
++  }
+   return true;
+ }
+ 
+@@ -937,6 +1061,7 @@
+ 
+ void ModuleSanitizerCoverage::InjectCoverageAtBlock(Function &F, BasicBlock &BB,
+                                                     size_t Idx,
++                                                    unsigned int distance,
+                                                     bool IsLeafFunc) {
+   BasicBlock::iterator IP = BB.getFirstInsertionPt();
+   bool IsEntryBB = &BB == &F.getEntryBlock();
+@@ -956,6 +1081,10 @@
+   if (Options.TracePC) {
+     IRB.CreateCall(SanCovTracePC)
+         ->setCannotMerge(); // gets the PC using GET_CALLER_PC.
++    if (Options.CompileTime == 2) {
++      IRB.CreateCall(SanCovMarkBlock, {IRB.getInt32(distance)})
++          ->setCannotMerge(); // SyzDirect: record distance via kcov_mark_block
++    }
+   }
+   if (Options.TracePCGuard) {
+     auto GuardPtr = IRB.CreateIntToPtr(
