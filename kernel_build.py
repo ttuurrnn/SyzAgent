@@ -380,6 +380,10 @@ def append_build_config(config_path, boot_profile="default", target_configs=None
         "CONFIG_USB_DWC2",
         # Some older media drivers crash the LLVM bitcode wrapper with clang 18.
         "CONFIG_DVB_B2C2_FLEXCOP_USB",
+        # objtool fails to compile with GCC 13 (-Wuse-after-free in subcmd-util.h).
+        # objtool is for unwinder validation only; not needed for fuzzing.
+        "CONFIG_OBJTOOL",
+        "CONFIG_STACK_VALIDATION",
     ]
     lines = [f"{c}=n" for c in disabled]
     lines.extend([

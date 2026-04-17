@@ -61,16 +61,26 @@ def _clean_recommend_syscalls(value):
             if str(item).strip() and str(item).strip().lower() != 'nan']
 
 
-def _write_minimal_k2s(k2s_path, target_func, recommend_syscalls):
-    """Write a conservative k2s fallback when interface analysis cannot finish."""
+def _write_minimal_k2s(k2s_path, target_func, recommend_syscalls, anchor=None):
+    """Write a conservative k2s fallback when interface analysis cannot finish.
+
+    anchor: caller/parent function to use as k2s key instead of target_func.
+    TARGET_ANALYZER does forward analysis from the k2s key, so if key == target
+    the distance is 0 and the result is excluded.  Use the direct caller instead.
+    """
     calls = _clean_recommend_syscalls(recommend_syscalls)
     target = str(target_func or '').strip()
     if not target or target.lower() == 'nan' or not calls:
         return False
+    # Prefer anchor (caller function) so TARGET_ANALYZER sees distance >= 1
+    key = str(anchor or '').strip()
+    if not key or key.lower() == 'nan':
+        key = target
     os.makedirs(os.path.dirname(k2s_path), exist_ok=True)
     with open(k2s_path, "w") as f:
-        json.dump({target: {"none": calls}}, f, indent="\t")
-    print(f"  Fallback k2s: mapped {target} -> {calls}")
+        json.dump({key: {"none": calls}}, f, indent="\t")
+    print(f"  Fallback k2s: mapped {key} -> {calls}" +
+          (f" (anchor for {target})" if key != target else ""))
     return True
 
 
@@ -290,7 +300,8 @@ class DatasetPipeline:
                 if not ok:
                     print(f"  [case {ci}] ERROR: interface_generator failed!")
                     if not _write_minimal_k2s(k2s, dp.get('function', ''),
-                                              dp.get('recommend syscall', [])):
+                                              dp.get('recommend syscall', []),
+                                              anchor=dp.get('k2s_anchor', '')):
                         continue
             elif not os.path.exists(sig) and os.path.exists(k2s):
                 print(f"  [case {ci}] Using existing k2s without kernel_signature_full")
@@ -305,7 +316,8 @@ class DatasetPipeline:
                 except Exception as e:
                     print(f"  [case {ci}] ERROR: MatchSig failed: {e}")
                     if not _write_minimal_k2s(k2s, dp.get('function', ''),
-                                              dp.get('recommend syscall', [])):
+                                              dp.get('recommend syscall', []),
+                                              anchor=dp.get('k2s_anchor', '')):
                         continue
 
             # V7: Augment k2s with indirect dispatch resolution
@@ -370,7 +382,8 @@ class DatasetPipeline:
             if not _compact_has_targets(compact):
                 target_func = dp.get('function', '')
                 if _write_minimal_k2s(k2s, target_func,
-                                      dp.get('recommend syscall', [])):
+                                      dp.get('recommend syscall', []),
+                                      anchor=dp.get('k2s_anchor', '')):
                     print(f"  [case {ci}] Empty target analysis; retrying with fallback k2s")
                     if os.path.exists(compact):
                         os.remove(compact)
@@ -450,6 +463,7 @@ class DatasetPipeline:
                 write_makefile_kcov(src, dist_dir, target_func)
 
                 sh(f"cd {Q(src)} && make clean && make mrproper", check=False)
+                _patch_subcmd_util_h(src)
                 shutil.copyfile(config_path, os.path.join(temp, ".config"))
                 append_build_config(os.path.join(temp, ".config"))
 
