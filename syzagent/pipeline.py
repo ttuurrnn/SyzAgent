@@ -70,17 +70,24 @@ class SyzAgentPipeline:
             ],
         )
 
-        # 3. 템플릿 생성
+        # 3. 템플릿 생성 (template bundle + legacy callfile)
+        callfile_out = self.output / "callfile.json"
+        programs_out = self.output / "programs"
         self._run_module(
             SOURCE / "template" / "template_generator.py",
             [
                 "--analysis", str(templates_out),
                 "--distances", str(distances_out),
                 "--output", str(fuzz_out),
+                "--callfile-output", str(callfile_out),
+                "--program-output", str(programs_out),
             ],
         )
 
         print(f"\n[syzagent] 분석 완료. 출력: {self.output}/")
+        print(f"  템플릿:  {fuzz_out}/")
+        print(f"  콜파일:  {callfile_out}")
+        print(f"  프로그램: {programs_out}/")
 
     def run_triage(self):
         """--triage: 퍼징 로그 분류 → 에이전트 강화"""
@@ -122,8 +129,10 @@ class SyzAgentPipeline:
     def run_full(self):
         """--full: 분석 → triage 루프"""
         self.run_analyze()
-        print("\n[syzagent] 퍼징은 생성된 템플릿으로 run_experiment.sh를 통해 실행하세요.")
-        print(f"  bash scripts/run_experiment.sh agent-loop {self.output}/fuzz_templates")
+        callfile_out = self.output / "callfile.json"
+        print("\n[syzagent] 퍼징 실행:")
+        print(f"  python3 run_hunt.py fuzz -workdir <WORKDIR> -uptime 24")
+        print(f"  (callfile: {callfile_out})")
 
     # ------------------------------------------------------------------
     # 내부 헬퍼
