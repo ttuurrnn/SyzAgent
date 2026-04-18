@@ -440,7 +440,21 @@ class NewCVEPipeline:
         src_dir = self.layout.src(ci)
         if os.path.isdir(src_dir):
             try:
-                from indirect_dispatch_resolver import augment_k2s
+                from indirect_dispatch_resolver import (
+                    augment_k2s, filter_k2s_by_reachability)
+                # V8: drop MatchSig false positives first
+                if os.path.exists(k2s):
+                    with open(k2s) as f:
+                        k2s_data = json.load(f)
+                    before = len(k2s_data)
+                    filtered = filter_k2s_by_reachability(
+                        k2s_data, self.function, src_dir)
+                    if filtered:
+                        with open(k2s, "w") as f:
+                            json.dump(filtered, f, indent="\t")
+                        if len(filtered) != before:
+                            print(f"  [V8] filter {before} → "
+                                  f"{len(filtered)} handlers")
                 augmented = augment_k2s(
                     k2s, src_dir, self.function,
                     self.file_path or None,

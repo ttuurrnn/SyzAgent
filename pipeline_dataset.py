@@ -325,8 +325,31 @@ class DatasetPipeline:
             target_func = dp.get('function', '')
             if target_func and str(target_func).strip() not in ('', 'nan') \
                and os.path.isdir(src_dir):
+                # V8: Filter MatchSig false positives before augmenting.
+                # MatchSig returns any handler whose signature matches; drop
+                # those that cannot reach target_function.
                 try:
-                    from indirect_dispatch_resolver import augment_k2s
+                    from indirect_dispatch_resolver import (
+                        augment_k2s, filter_k2s_by_reachability)
+                    if os.path.exists(k2s):
+                        with open(k2s) as f:
+                            k2s_data = json.load(f)
+                        before = len(k2s_data)
+                        filtered = filter_k2s_by_reachability(
+                            k2s_data, str(target_func).strip(), src_dir)
+                        if not filtered:
+                            print(f"  [case {ci}] V8: filter removed all handlers — "
+                                  f"MatchSig all-false-positive; writing fallback k2s")
+                            _write_minimal_k2s(k2s,
+                                               str(target_func).strip(),
+                                               dp.get('recommend syscall', []),
+                                               anchor=dp.get('k2s_anchor', ''))
+                        else:
+                            with open(k2s, "w") as f:
+                                json.dump(filtered, f, indent="\t")
+                            if len(filtered) != before:
+                                print(f"  [case {ci}] V8: filter {before} → "
+                                      f"{len(filtered)} handlers")
                     target_file = dp.get('file_path', dp.get('file', None))
                     augmented = augment_k2s(k2s, src_dir,
                                             str(target_func).strip(),
