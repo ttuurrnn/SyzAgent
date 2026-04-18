@@ -433,9 +433,14 @@ def write_makefile_kcov(src_dir, dist_dir, target_func):
     that target_analyzer can identify instrumented blocks.
     """
     path = os.path.join(src_dir, "scripts", "Makefile.kcov")
+    # Kbuild resolves symlinked source trees to their real path in compile
+    # commands. The SyzDirect clang pass matches source files against this
+    # prefix before loading <relative-path>.dist, so passing the symlink path
+    # makes every block fall back to UINT_MAX distance.
+    src_for_clang = os.path.realpath(src_dir)
     flags = (
         f"-fsanitize-coverage=trace-pc,second "
-        f"-fsanitize-coverage-kernel-src-dir={src_dir} "
+        f"-fsanitize-coverage-kernel-src-dir={src_for_clang} "
         f"-fsanitize-coverage-target-function={target_func}"
     )
     if dist_dir:
