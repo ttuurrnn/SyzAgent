@@ -1,0 +1,11 @@
+# 3-way rolling pipeline — cases 1-50
+# workdir_agent:     /home/ai/work_real/workdir_100_k515
+# workdir_baseline:  /home/ai/work_real/workdir_100_k515_baseline
+# workdir_proactive: /home/ai/work_real/workdir_100_k515_proactive
+#
+# case_id, dataset_xlsx, workdir_agent, workdir_baseline, workdir_proactive, build_j, fuzz_j, linux_template
+4, /home/ai/work/SyzAgent/generated_datasets/syzdirect_100/case_4.xlsx, /home/ai/work_real/workdir_100_k515, /home/ai/work_real/workdir_100_k515_baseline, /home/ai/work_real/workdir_100_k515_proactive, 4, 2, /home/ai/work_real/workdir_v3_ga/srcs/case_0
+6, /home/ai/work/SyzAgent/generated_datasets/syzdirect_100/case_6.xlsx, /home/ai/work_real/workdir_100_k515, /home/ai/work_real/workdir_100_k515_baseline, /home/ai/work_real/workdir_100_k515_proactive, 4, 2, /home/ai/work_real/workdir_v3_ga/srcs/case_0
+7, /home/ai/work/SyzAgent/generated_datasets/syzdirect_100/case_7.xlsx, /home/ai/work_real/workdir_100_k515, /home/ai/work_real/workdir_100_k515_baseline, /home/ai/work_real/workdir_100_k515_proactive, 4, 2, /home/ai/work_real/workdir_v3_ga/srcs/case_0
+9, /home/ai/work/SyzAgent/generated_datasets/syzdirect_100/case_9.xlsx, /home/ai/work_real/workdir_100_k515, /home/ai/work_real/workdir_100_k515_baseline, /home/ai/work_real/workdir_100_k515_proactive, 4, 2, /home/ai/work_real/workdir_v3_ga/srcs/case_0
+13, /home/ai/work/SyzAgent/generated_datasets/syzdirect_100/case_13.xlsx, /home/ai/work_real/workdir_100_k515, /home/ai/work_real/workdir_100_k515_baseline, /home/ai/work_real/workdir_100_k515_proactive, 4, 2, /home/ai/work_real/workdir_v3_ga/srcs/case_0

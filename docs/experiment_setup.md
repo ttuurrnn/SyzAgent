@@ -22,6 +22,12 @@ cd SyzAgent
 
 # 전체 자동 설치 (LLVM 18 빌드 포함, 30~60분 소요)
 bash scripts/setup.sh
+
+# 이호준처럼 51~100번을 맡는 경우: 설치 후 3-way CSV까지 생성
+bash scripts/setup.sh \
+  --workdir-base /home/$USER/work_real \
+  --cases 51-100 \
+  --cases-output rolling_cases_51_100_local.csv
 ```
 
 setup.sh가 하는 작업:
@@ -30,6 +36,7 @@ setup.sh가 하는 작업:
 3. interface_generator (C++ 정적 분석 도구) 빌드
 4. target_analyzer (거리 계산 도구) 빌드
 5. syzkaller fuzzer 빌드
+6. `--workdir-base`를 주면 3-way rolling CSV 생성
 
 설치 완료 후 확인:
 ```bash
@@ -49,12 +56,20 @@ python3 scripts/doctor.py
 
 ### 비교 실험 (SyzAgent vs SyzDirect)
 
-`run_rolling_pipeline.py`가 두 버전을 자동으로 동시에 실행한다.
+`run_rolling_pipeline.py`가 세 조건을 자동으로 동시에 실행한다.
 - **agent** (`workdir_agent`): LLM 에이전트 루프 포함 (SyzAgent)
 - **baseline** (`workdir_baseline`): 에이전트 없는 순수 SyzDirect
+- **proactive** (`workdir_proactive`): agent loop + proactive seed
 
 ```bash
 cd /path/to/SyzAgent
+
+# 51~100 담당자가 setup.sh에서 만든 CSV로 실행
+python3 -u run_rolling_pipeline.py \
+  --cases-csv rolling_cases_51_100_local.csv \
+  --fuzz-hours 6 \
+  --fuzz-slots 3 \
+  2>&1 | tee bg_logs/rolling_pipeline/main_51_100.log &
 
 # 새 실험 시작
 python3 -u run_rolling_pipeline.py \
@@ -78,15 +93,16 @@ tmux send-keys -t syzagent_exp "cd /path/to/SyzAgent && python3 -u run_rolling_p
 
 ## 4. workdir 경로 설정
 
-`rolling_cases_100.csv`에서 `workdir_agent`와 `workdir_baseline` 경로를 본인 환경에 맞게 수정:
+`make_cases_csv.py`로 본인 환경에 맞는 CSV를 생성한다. 직접 수정해야 한다면 `workdir_agent`, `workdir_baseline`, `workdir_proactive` 세 경로를 모두 맞춘다.
 
 ```csv
-# case_id, dataset_xlsx, workdir_agent, workdir_baseline, build_j, fuzz_j, linux_template
-1, .../case_1.xlsx, /your/path/workdir_agent, /your/path/workdir_baseline, 4, 2, /optional/linux/src
+# case_id, dataset_xlsx, workdir_agent, workdir_baseline, workdir_proactive, build_j, fuzz_j, linux_template
+51, .../case_51.xlsx, /your/path/workdir_agent, /your/path/workdir_baseline, /your/path/workdir_proactive, 4, 2, /optional/linux/src
 ```
 
 - `workdir_agent`: agent 버전(SyzAgent)이 사용할 작업 디렉토리
 - `workdir_baseline`: baseline 버전(순수 SyzDirect)이 사용할 작업 디렉토리
+- `workdir_proactive`: proactive seed 조건이 사용할 작업 디렉토리
 - `build_j`: 빌드 병렬 수 (RAM 여유에 따라 설정, 권장 4)
 - `fuzz_j`: 퍼징 VM 수 (기본 2)
 
