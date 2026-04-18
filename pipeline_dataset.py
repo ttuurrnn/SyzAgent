@@ -98,6 +98,268 @@ def _compact_has_targets(path):
                if isinstance(item, dict))
 
 
+_GENERIC_K2S_PREFIXES = (
+    "do_arch_prctl",
+    "__se_sys_modify_ldt",
+    "write_ldt",
+    "__se_sys_prctl",
+    "prctl_",
+    "set_tsc_mode",
+    "arch_prctl_",
+    "do_syscall_",
+    "entry_SYSCALL",
+)
+
+
+def _is_generic_k2s_key(key):
+    return any(str(key).startswith(prefix) for prefix in _GENERIC_K2S_PREFIXES)
+
+
+def _load_json_file(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _syscall_base(name):
+    return str(name).split("$", 1)[0].strip()
+
+
+def _flatten_k2s_syscalls(data):
+    calls = set()
+    if not isinstance(data, dict):
+        return calls
+    for value in data.values():
+        if not isinstance(value, dict):
+            continue
+        for call_list in value.values():
+            if isinstance(call_list, list):
+                calls.update(_syscall_base(c) for c in call_list)
+    return {c for c in calls if c}
+
+
+def _validate_k2s_mapping(k2s_path, target_func, recommend_syscalls, anchor=None):
+    """Reject obvious MatchSig false positives before distance generation."""
+    data = _load_json_file(k2s_path)
+    if not isinstance(data, dict) or not data:
+        return False, "k2s missing or empty"
+
+    keys = [str(k) for k in data.keys()]
+    target = str(target_func or "").strip()
+    manual_anchor = str(anchor or "").strip()
+    generic_hits = [k for k in keys if _is_generic_k2s_key(k)]
+    if generic_hits:
+        return False, f"generic MatchSig anchors: {generic_hits[:8]}"
+
+    if manual_anchor and manual_anchor.lower() != "nan" and manual_anchor in data:
+        return True, "manual k2s_anchor present"
+    if target and target.lower() != "nan" and target in data:
+        return True, "target function present"
+
+    recommends = {_syscall_base(c) for c in _clean_recommend_syscalls(recommend_syscalls)}
+    if recommends:
+        mapped = _flatten_k2s_syscalls(data)
+        if mapped and mapped.isdisjoint(recommends) and generic_hits:
+            return False, (
+                f"generic anchor with no recommend syscall overlap "
+                f"(recommend={sorted(recommends)}, mapped sample={sorted(mapped)[:8]})"
+            )
+
+    return True, "k2s accepted"
+
+
+def _infer_syscalls_from_target(target_func, target_file):
+    target = str(target_func or "")
+    path = str(target_file or "")
+    rules = [
+        ("net/qrtr/tun.c", "read_iter", ["read$qrtrtun"]),
+        ("net/qrtr/tun.c", "write_iter", ["write$qrtrtun"]),
+        ("net/xdp/", "", ["setsockopt$XDP_UMEM_REG"]),
+        ("net/wireless/", "", ["sendmsg$NL80211_CMD_SET_INTERFACE",
+                                "sendmsg$NL80211_CMD_CONNECT"]),
+        ("net/rxrpc/", "", ["sendto$rxrpc", "sendmsg$rxrpc"]),
+        ("kernel/trace/bpf", "", ["bpf$BPF_MAP_FREEZE"]),
+        ("kernel/watch_queue.c", "", ["keyctl$KEYCTL_WATCH_KEY",
+                                       "pipe2$watch_queue"]),
+        ("drivers/block/nbd.c", "", ["write$nbd", "socketpair$nbd"]),
+        ("block/genhd.c", "", ["openat$cgroup"]),
+        ("drivers/gpu/drm/", "", ["read$fb", "write$fb", "mmap$fb"]),
+        ("drivers/video/fbdev/", "", ["read$fb", "write$fb", "mmap$fb"]),
+        ("net/sched/cls_", "", ["sendmsg$nl_route_sched"]),
+        ("net/sched/sch_", "", ["sendmsg$nl_route_sched"]),
+        ("net/sched/act_", "", ["sendmsg$nl_route_sched"]),
+    ]
+    for path_pat, target_pat, calls in rules:
+        if path_pat in path and (not target_pat or target_pat in target):
+            return calls
+    return []
+
+
+def _function_spans(source_text):
+    pattern = re.compile(
+        r"^[A-Za-z_][\w\s\*\(\),]*\s+([A-Za-z_]\w*)\s*\([^;]*\)\s*\{",
+        re.M,
+    )
+    spans = []
+    for m in pattern.finditer(source_text):
+        name = m.group(1)
+        start = m.end() - 1
+        depth = 0
+        end = None
+        for idx in range(start, len(source_text)):
+            ch = source_text[idx]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = idx + 1
+                    break
+        if end:
+            spans.append((name, m.start(), end))
+    return spans
+
+
+def _find_direct_callers(src_dir, target_func, target_file=None, max_callers=8):
+    target = str(target_func or "").strip()
+    if not target:
+        return []
+    paths = []
+    if target_file:
+        p = os.path.join(src_dir, str(target_file))
+        if os.path.exists(p):
+            paths.append(p)
+    if not paths:
+        try:
+            out = subprocess.run(
+                ["grep", "-rl", "--include", "*.c",
+                 rf"{target}\s*\(", src_dir],
+                capture_output=True, text=True, timeout=30,
+            ).stdout
+            paths.extend([p for p in out.splitlines() if p])
+        except Exception:
+            pass
+
+    callers = []
+    call_re = re.compile(rf"\b{re.escape(target)}\s*\(")
+    def_re = re.compile(rf"\b{re.escape(target)}\s*\([^;]*\)\s*\{{")
+    for path in paths[:20]:
+        try:
+            txt = open(path, errors="ignore").read()
+        except OSError:
+            continue
+        for name, start, end in _function_spans(txt):
+            if name == target:
+                continue
+            body = txt[start:end]
+            if call_re.search(body) and not def_re.search(body):
+                if name not in callers:
+                    callers.append(name)
+                    if len(callers) >= max_callers:
+                        return callers
+    return callers
+
+
+def _write_repaired_k2s(k2s_path, dp, layout=None, ci=None):
+    target = str(dp.get("function", "") or "").strip()
+    if not target or target.lower() == "nan":
+        return False
+
+    calls = _clean_recommend_syscalls(dp.get("recommend syscall", []))
+    target_file = dp.get("file_path", dp.get("file", ""))
+    if not calls:
+        calls = _infer_syscalls_from_target(target, target_file)
+    if not calls:
+        return False
+
+    anchors = []
+    explicit = str(dp.get("k2s_anchor", "") or "").strip()
+    if explicit and explicit.lower() != "nan":
+        anchors.append(explicit)
+
+    if layout is not None and ci is not None:
+        src_dir = layout.src(ci)
+        if os.path.isdir(src_dir):
+            anchors.extend(_find_direct_callers(src_dir, target, target_file))
+
+    anchors.append(target)
+    uniq = []
+    for item in anchors:
+        if item and item not in uniq and not _is_generic_k2s_key(item):
+            uniq.append(item)
+
+    if not uniq:
+        return False
+
+    repaired = {anchor: {"none": calls} for anchor in uniq}
+    os.makedirs(os.path.dirname(k2s_path), exist_ok=True)
+    with open(k2s_path, "w") as f:
+        json.dump(repaired, f, indent="\t")
+    print(f"  Repaired k2s: mapped anchors {uniq} -> {calls}")
+    return True
+
+
+def _invalidate_target_outputs(layout, ci):
+    for path in (layout.compact(ci), layout.tfinfo(ci), layout.dup_report(ci)):
+        if os.path.exists(path):
+            os.remove(path)
+    dist_root = layout.tpa(ci)
+    if os.path.isdir(dist_root):
+        for name in os.listdir(dist_root):
+            if name.startswith("distance_xidx"):
+                shutil.rmtree(os.path.join(dist_root, name), ignore_errors=True)
+    # The instrumented kernel embeds the distance map at build time. If k2s or
+    # target analysis changes, reusing the old bzImage silently preserves the
+    # bad guidance and produces runtime dist 0/0.
+    shutil.rmtree(layout.kwithdist(ci), ignore_errors=True)
+    shutil.rmtree(layout.fuzzinps(ci), ignore_errors=True)
+
+
+def _distance_dir_has_finite_values(dist_dir):
+    if not os.path.isdir(dist_dir):
+        return False
+    checked = 0
+    for root, _dirs, files in os.walk(dist_dir):
+        for name in files:
+            if not name.endswith(".dist"):
+                continue
+            checked += 1
+            path = os.path.join(root, name)
+            try:
+                with open(path) as f:
+                    for line in f:
+                        parts = line.split()
+                        if len(parts) < 3:
+                            continue
+                        try:
+                            dist = int(parts[2])
+                        except ValueError:
+                            continue
+                        if 0 <= dist < 4294967295:
+                            return True
+            except OSError:
+                continue
+            if checked >= 200:
+                return False
+    return False
+
+
+def _validate_distance_map(layout, ci):
+    compact = layout.compact(ci)
+    if not _compact_has_targets(compact):
+        return False, "CompactOutput missing target syscall infos"
+    dist_dir = layout.dist_dir(ci, 0)
+    if not os.path.isdir(dist_dir):
+        return False, f"distance directory missing: {dist_dir}"
+    if not any(name.endswith(".dist") for name in os.listdir(dist_dir)):
+        return False, f"distance directory has no .dist files: {dist_dir}"
+    if not _distance_dir_has_finite_values(dist_dir):
+        return False, "distance files contain no finite distance values"
+    return True, "distance map accepted"
+
+
 class DatasetPipeline:
     """Run the original SyzDirect pipeline on all datapoints in a dataset.xlsx file."""
 
@@ -299,9 +561,7 @@ class DatasetPipeline:
                     bc, iface_dir, sig, INTERFACE_GENERATOR)
                 if not ok:
                     print(f"  [case {ci}] ERROR: interface_generator failed!")
-                    if not _write_minimal_k2s(k2s, dp.get('function', ''),
-                                              dp.get('recommend syscall', []),
-                                              anchor=dp.get('k2s_anchor', '')):
+                    if not _write_repaired_k2s(k2s, dp, self.layout, ci):
                         continue
             elif not os.path.exists(sig) and os.path.exists(k2s):
                 print(f"  [case {ci}] Using existing k2s without kernel_signature_full")
@@ -315,10 +575,20 @@ class DatasetPipeline:
                         json.dump(result, f, indent="\t")
                 except Exception as e:
                     print(f"  [case {ci}] ERROR: MatchSig failed: {e}")
-                    if not _write_minimal_k2s(k2s, dp.get('function', ''),
-                                              dp.get('recommend syscall', []),
-                                              anchor=dp.get('k2s_anchor', '')):
+                    if not _write_repaired_k2s(k2s, dp, self.layout, ci):
                         continue
+
+            valid, reason = _validate_k2s_mapping(
+                k2s, dp.get('function', ''), dp.get('recommend syscall', []),
+                anchor=dp.get('k2s_anchor', ''))
+            if not valid:
+                print(f"  [case {ci}] WARNING: invalid MatchSig k2s detected: {reason}")
+                if _write_repaired_k2s(k2s, dp, self.layout, ci):
+                    _invalidate_target_outputs(self.layout, ci)
+                    print(f"  [case {ci}] Replaced generic k2s before V7 augmentation")
+                else:
+                    print(f"  [case {ci}] ERROR: unable to repair k2s before V7")
+                    continue
 
             # V7: Augment k2s with indirect dispatch resolution
             src_dir = self.layout.src(ci)
@@ -338,6 +608,20 @@ class DatasetPipeline:
                           f"dispatch ({len(augmented)} entries)")
                 except Exception as e:
                     print(f"  [case {ci}] V7: k2s augmentation failed: {e}")
+
+            valid, reason = _validate_k2s_mapping(
+                k2s, dp.get('function', ''), dp.get('recommend syscall', []),
+                anchor=dp.get('k2s_anchor', ''))
+            if not valid:
+                print(f"  [case {ci}] WARNING: invalid k2s detected: {reason}")
+                if _write_repaired_k2s(k2s, dp, self.layout, ci):
+                    _invalidate_target_outputs(self.layout, ci)
+                    print(f"  [case {ci}] Replaced k2s and invalidated target outputs")
+                else:
+                    print(f"  [case {ci}] ERROR: unable to write fallback k2s")
+                    continue
+            else:
+                print(f"  [case {ci}] k2s validation: {reason}")
 
             print(f"  [case {ci}] Kernel interface analyzed")
 
@@ -381,10 +665,8 @@ class DatasetPipeline:
 
             if not _compact_has_targets(compact):
                 target_func = dp.get('function', '')
-                if _write_minimal_k2s(k2s, target_func,
-                                      dp.get('recommend syscall', []),
-                                      anchor=dp.get('k2s_anchor', '')):
-                    print(f"  [case {ci}] Empty target analysis; retrying with fallback k2s")
+                if _write_repaired_k2s(k2s, dp, self.layout, ci):
+                    print(f"  [case {ci}] Empty target analysis; retrying with repaired k2s")
                     if os.path.exists(compact):
                         os.remove(compact)
                     tfinfo = self.layout.tfinfo(ci)
@@ -396,6 +678,13 @@ class DatasetPipeline:
                        f"-kernel-interface-file={Q(k2s)} "
                        f"-multi-pos-points={Q(pts)} "
                        f"{Q(bc)} 2>&1 | tee log", big=True)
+
+            valid_distance, distance_reason = _validate_distance_map(self.layout, ci)
+            if not valid_distance:
+                print(f"  [case {ci}] ERROR: invalid distance map: {distance_reason}")
+                print(f"  [case {ci}] Skipping fuzz preparation until k2s/distance is fixed")
+                continue
+            print(f"  [case {ci}] distance validation: {distance_reason}")
 
             dup = self.layout.dup_report(ci)
             if os.path.exists(dup):

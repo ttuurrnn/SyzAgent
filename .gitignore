@@ -37,6 +37,7 @@ deps/
 logs/
 runs/
 results/
+bg_logs/
 B*_crashes/
 *.qcow2
 bzImage
