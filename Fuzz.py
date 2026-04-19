@@ -126,8 +126,13 @@ def MultirunFuzzer():
                     # syz-manager expects 'vmlinux' in kernel_obj; ensure symlink exists
                     vm_link = os.path.join(kernel_obj_dir, "vmlinux")
                     vm_0    = os.path.join(kernel_obj_dir, "vmlinux_0")
-                    if not os.path.exists(vm_link) and os.path.exists(vm_0):
-                        os.symlink(vm_0, vm_link)
+                    if os.path.exists(vm_0):
+                        if os.path.islink(vm_link):
+                            if os.path.realpath(vm_link) != os.path.realpath(vm_0):
+                                os.remove(vm_link)
+                                os.symlink(vm_0, vm_link)
+                        elif not os.path.exists(vm_link):
+                            os.symlink(vm_0, vm_link)
 
                 bug_title = datapoint['repro bug title']
                 if not pd.isna(bug_title):
