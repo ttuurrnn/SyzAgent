@@ -888,6 +888,41 @@ def augment_callfile(callfile_path: str, src_dir: str, target_function: str,
     return modified
 
 
+def filter_k2s_by_reachability(k2s: dict, target_function: str,
+                               src_dir: str) -> dict:
+    """Remove k2s handlers that do not reach target_function.
+
+    MatchSig matches kernel handlers to syzkaller syscalls by argument
+    signature alone, so it produces false positives (e.g. do_arch_prctl_64
+    matched to an SCTP target). Those false positives dilute distance-based
+    energy allocation. Use the call-chain trace from indirect dispatch
+    resolution to identify the handler(s) actually reachable from the
+    target and drop the rest.
+
+    If trace_target_to_handler cannot find a chain (verification failure),
+    the original k2s is returned unchanged — never wipe data we cannot
+    verify against.
+    """
+    if not k2s or not target_function:
+        return k2s
+    try:
+        registrations = scan_registration_patterns(src_dir)
+        handler_map = build_handler_to_syscall_map(registrations)
+        trace = trace_target_to_handler(target_function, src_dir, handler_map)
+    except Exception as e:
+        log.warning(f"filter_k2s: trace failed ({e}); keeping original k2s")
+        return k2s
+    if not trace:
+        return k2s
+    valid = set(trace.get("call_chain", []))
+    valid.add(trace["handler"])
+    filtered = {h: v for h, v in k2s.items() if h in valid}
+    if not filtered:
+        log.info("filter_k2s: no overlap with trace chain; keeping original")
+        return k2s
+    return filtered
+
+
 # ── CLI interface ──
 if __name__ == "__main__":
     import argparse

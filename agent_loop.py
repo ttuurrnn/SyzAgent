@@ -924,7 +924,20 @@ class AgentLoop:
             self._k2s_augmented = True  # set before attempt — don't retry on error
             if os.path.exists(k2s_path) and os.path.isdir(src_dir):
                 try:
-                    from indirect_dispatch_resolver import augment_k2s
+                    from indirect_dispatch_resolver import (
+                        augment_k2s, filter_k2s_by_reachability)
+                    # V8: drop MatchSig false positives first
+                    with open(k2s_path) as f:
+                        k2s_data = json.load(f)
+                    before = len(k2s_data)
+                    filtered = filter_k2s_by_reachability(
+                        k2s_data, target_func, src_dir)
+                    if filtered:
+                        with open(k2s_path, "w") as f:
+                            json.dump(filtered, f)
+                        if len(filtered) != before:
+                            print(f"  [R4] V8 filter {before} → "
+                                  f"{len(filtered)} handlers")
                     augmented = augment_k2s(
                         k2s_path, src_dir, target_func,
                         target_file or None,
