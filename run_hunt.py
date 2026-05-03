@@ -83,7 +83,7 @@ def build_parser():
         epilog=f"""
 Examples:
   # Dataset mode (like original Main.py):
-  python3 run_hunt.py dataset -dataset dataset_hunt.xlsx -j 8 \\
+  python3 run_hunt.py dataset -dataset /path/to/dataset.xlsx -j 8 \\
       prepare_for_manual_instrument compile_kernel_bitcode \\
       analyze_kernel_syscall extract_syscall_entry \\
       instrument_kernel_with_distance fuzz

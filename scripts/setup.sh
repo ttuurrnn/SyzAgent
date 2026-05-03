@@ -2,12 +2,8 @@
 # SyzDirect Environment Setup Script
 # Clone 후 이 스크립트를 실행하면 파이프라인 실행에 필요한 모든 빌드를 수행합니다.
 #
-# Usage: ./scripts/setup.sh [--jobs N] [--workdir-base PATH] [--cases 51-100]
+# Usage: ./scripts/setup.sh [--jobs N]
 #   --jobs N              : 병렬 빌드 수 (기본: 물리 코어의 절반, OOM 방지)
-#   --workdir-base PATH   : 3-way rolling CSV를 생성할 workdir 루트
-#   --cases RANGE         : 생성할 케이스 범위 (기본: 51-100)
-#   --cases-output PATH   : 생성할 CSV 경로 (기본: rolling_cases_${cases}.csv)
-#   --linux-template PATH : 재사용할 kernel source template 경로
 #
 # 필요 조건:
 #   - Ubuntu 20.04+ / Debian 11+
@@ -24,17 +20,9 @@ SYZDIRECT_DIR="$SOURCE_DIR/syzdirect"
 # Parse arguments
 JOBS=$(( $(nproc) / 2 ))
 [ "$JOBS" -lt 2 ] && JOBS=2
-WORKDIR_BASE=""
-CASES_RANGE="51-100"
-CASES_OUTPUT=""
-LINUX_TEMPLATE=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --jobs) JOBS="$2"; shift 2 ;;
-        --workdir-base) WORKDIR_BASE="$2"; shift 2 ;;
-        --cases) CASES_RANGE="$2"; shift 2 ;;
-        --cases-output) CASES_OUTPUT="$2"; shift 2 ;;
-        --linux-template) LINUX_TEMPLATE="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -200,35 +188,11 @@ check "$SYZ_MANAGER"                   "syz-manager"
 
 if $PASS; then
     log "All components built successfully!"
-    if [ -n "$WORKDIR_BASE" ]; then
-        RANGE_SAFE="${CASES_RANGE//[^0-9A-Za-z_]/_}"
-        if [ -z "$CASES_OUTPUT" ]; then
-            CASES_OUTPUT="$PROJECT_ROOT/rolling_cases_${RANGE_SAFE}.csv"
-        elif [[ "$CASES_OUTPUT" != /* ]]; then
-            CASES_OUTPUT="$PROJECT_ROOT/$CASES_OUTPUT"
-        fi
-
-        CSV_CMD=(python3 "$PROJECT_ROOT/make_cases_csv.py"
-            --syzagent-dir "$PROJECT_ROOT"
-            --workdir-base "$WORKDIR_BASE"
-            --cases "$CASES_RANGE"
-            --output "$CASES_OUTPUT")
-        if [ -n "$LINUX_TEMPLATE" ]; then
-            CSV_CMD+=(--linux-template "$LINUX_TEMPLATE")
-        fi
-
-        log "Generating 3-way rolling CSV for cases $CASES_RANGE..."
-        "${CSV_CMD[@]}"
-    fi
     log ""
     log "Usage:"
     log "  cd $PROJECT_ROOT"
-    if [ -n "$WORKDIR_BASE" ]; then
-        log "  python3 -u run_rolling_pipeline.py --cases-csv $CASES_OUTPUT --fuzz-hours 6 --fuzz-slots 3"
-    else
-        log "  python3 make_cases_csv.py --workdir-base /your/workdir/root --cases 51-100 --output rolling_cases_51_100_local.csv"
-        log "  python3 -u run_rolling_pipeline.py --cases-csv rolling_cases_51_100_local.csv --fuzz-hours 6 --fuzz-slots 3"
-    fi
+    log "  python3 -m syzagent --analyze --target targets/example_target.json --kernel /path/to/linux"
+    log "  python3 -m syzagent --case 54 --output .runtime"
     log ""
     log "See README.md for full documentation."
 else

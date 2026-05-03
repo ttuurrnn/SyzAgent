@@ -39,6 +39,10 @@ runs/
 results/
 bg_logs/
 B*_crashes/
+generated_datasets/
+rolling_cases*.csv
+dataset_*.xlsx
+case_*.xlsx
 *.qcow2
 bzImage
 vmlinux
@@ -61,3 +65,6 @@ source/syzdirect/Runner/test_runs/
 source/syzdirect/Runner/bg_logs/
 workdir/
 bug_report_*.md
+
+# Local run configuration
+configs/run_case.env
