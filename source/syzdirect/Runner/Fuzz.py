@@ -12,8 +12,6 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-import pandas as pd
-
 import Config
 
 
@@ -75,6 +73,8 @@ def _alloc_free_tcp_port():
 
 
 def MultirunFuzzer():
+    import pandas as pd
+
     run_items = []
     clean_image_path = Config.CleanImageTemplatePath
     syzdirect_path = Config.FuzzerDir

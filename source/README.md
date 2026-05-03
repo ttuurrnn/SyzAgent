@@ -9,7 +9,7 @@ This directory contains the reusable implementation pieces used by the top-level
 - `distance/`: target distance calculation wrapper.
 - `template/`: template bundle, callfile, and seed program generation.
 - `common/`: shared target and template data helpers.
-- `syzdirect/`: SyzDirect LLVM passes, kernel analysis tool, patched fuzzer, and static configs.
+- `syzdirect/`: SyzDirect runner modules, LLVM passes, kernel analysis tool, patched fuzzer, and static configs.
 - `kcov_patches/`, `syzdirect_patches/`: patch files used during local builds.
 
 Build outputs and downloaded toolchains are intentionally ignored. Use `../scripts/setup.sh` from the repository root to build the required LLVM/SyzDirect components.

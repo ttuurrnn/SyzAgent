@@ -8,7 +8,8 @@ SyzAgent combines the SyzDirect directed kernel fuzzing pipeline with an agent l
 - `source/agent/`: failure triage and template/seed enhancement agents.
 - `source/analyzer/`, `source/distance/`, `source/template/`: Python analysis, distance, and template generation helpers.
 - `source/syzdirect/`: SyzDirect LLVM analysis tools, kernel analysis tools, and syzkaller-based fuzzer fork.
-- Root runner modules such as `run_hunt.py`, `pipeline_new_cve.py`, `pipeline_dataset.py`, `agent_loop.py`, and related helpers.
+- `source/syzdirect/Runner/`: SyzDirect runner modules such as `pipeline_new_cve.py`, `pipeline_dataset.py`, `agent_loop.py`, and related helpers.
+- `run_hunt.py`: small compatibility wrapper for the lower-level runner.
 - `scripts/`: setup, host bootstrap, health check, case runner, dataset runner, and experiment runner wrappers.
 
 ## Repository Layout
@@ -21,7 +22,11 @@ SyzAgent combines the SyzDirect directed kernel fuzzing pipeline with an agent l
 │   ├── analyzer/             # syscall analysis wrapper
 │   ├── distance/             # target distance calculation wrapper
 │   ├── template/             # syz template/callfile generation
-│   └── syzdirect/            # SyzDirect engine and patched syzkaller fork
+│   └── syzdirect/
+│       ├── Runner/           # SyzDirect pipeline and agent-loop runner modules
+│       ├── syzdirect_fuzzer/
+│       ├── syzdirect_function_model/
+│       └── syzdirect_kernel_analysis/
 ├── scripts/
 │   ├── setup.sh              # build LLVM/SyzDirect/syzkaller components
 │   ├── bootstrap_host.sh     # install host packages
@@ -31,6 +36,7 @@ SyzAgent combines the SyzDirect directed kernel fuzzing pipeline with an agent l
 │   └── run_experiment.sh     # baseline/SyzDirect/agent-loop experiment runner
 ├── targets/example_target.json
 ├── configs/run_case.env.example
+├── run_hunt.py               # compatibility wrapper
 └── Makefile
 ```
 

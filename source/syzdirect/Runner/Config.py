@@ -2,7 +2,6 @@ import argparse
 from enum import Enum
 import logging
 import os
-import pandas as pd
 import shlex
 import subprocess
 import json
@@ -39,6 +38,8 @@ def Check(func,fail_str):
     assert len(fail_cases)==0, f"{fail_str}\n Fail cases: {','.join(fail_cases)}"
     
 def LoadDatapoints():
+    import pandas as pd
+
     res = pd.read_excel(DatasetFile)
     header = res.columns
     global datapoints
@@ -257,10 +258,8 @@ def PrepareBinary():
     logging.info("Manual check is expected for all the binaries in the bin/, e.p. syz-fuzzer, syz-manager...")
     
 def Prepare():
-    
+
     actions=PrepareArgParser()
     LoadDatapoints()
     PrepareBinary()
     return actions
-    
-    

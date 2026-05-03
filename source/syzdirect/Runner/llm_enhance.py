@@ -9,7 +9,7 @@ the fuzzer's distance stagnates.
 
 import json
 import os
-import shutil
+import shlex
 import struct
 import subprocess
 import tempfile
@@ -43,24 +43,23 @@ def _fuzzy_kind_match(target_kind, all_kinds):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# LLM backend — ollama (local) with opencode fallback
+# LLM backend — optional CLI command with ollama fallback
 # ──────────────────────────────────────────────────────────────────────────
 
 _OLLAMA_MODEL = os.environ.get("SYZDIRECT_LLM_MODEL", "qwen2.5-coder:14b")
 _OLLAMA_URL = os.environ.get("SYZDIRECT_OLLAMA_URL", "http://localhost:11434")
+_LLM_CMD = os.environ.get("SYZDIRECT_LLM_CMD", "").strip()
 
 
 def _call_llm(prompt, timeout=180):
-    """Call LLM via claude CLI (primary) or ollama (fallback). Returns response text or None."""
+    """Call an optional local LLM command or ollama. Returns response text or None."""
     import urllib.request
     import urllib.error
 
-    # Try claude CLI first (highest quality)
-    claude_bin = shutil.which("claude")
-    if claude_bin:
+    if _LLM_CMD:
         try:
             proc = subprocess.Popen(
-                [claude_bin, "--print", "--model", "sonnet"],
+                shlex.split(_LLM_CMD),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, start_new_session=True,
@@ -74,17 +73,17 @@ def _call_llm(prompt, timeout=180):
                 except OSError:
                     proc.kill()
                 proc.wait(timeout=5)
-                print(f"  [LLM] claude timed out after {timeout}s")
+                print(f"  [LLM] command timed out after {timeout}s")
                 stdout = None
                 stderr = None
             if stdout and stdout.strip():
                 text = stdout.strip()
-                print(f"  [LLM] claude responded ({len(text)} chars)")
+                print(f"  [LLM] command responded ({len(text)} chars)")
                 return text
             elif proc.returncode != 0:
-                print(f"  [LLM] claude failed (rc={proc.returncode}): {(stderr or '')[:200]}")
+                print(f"  [LLM] command failed (rc={proc.returncode}): {(stderr or '')[:200]}")
         except (FileNotFoundError, OSError) as e:
-            print(f"  [LLM] claude error: {e}")
+            print(f"  [LLM] command error: {e}")
 
     # Fallback to ollama (local)
     try:
