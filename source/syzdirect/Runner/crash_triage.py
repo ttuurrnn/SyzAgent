@@ -43,6 +43,10 @@ def match_known_crash(description, report_text, rules):
 # ──────────────────────────────────────────────────────────────────────────
 
 INFRA_MARKERS = (
+    "memory cgroup out of memory",
+    "bug: max_lockdep_keys too low",
+    "at do_notify_parent",
+    "warning: kernel/signal.c",
     "no output from test machine",
     "lost connection to test machine",
     "machine check failed",
@@ -67,9 +71,20 @@ def _read_text_if_exists(path):
 
 
 def target_relevance(text, target_info, target_context, target_call_names):
-    """Check if crash text is related to the fuzzing target."""
+    """Check if crash text is related to the fuzzing target.
+
+    Strips absolute file paths first so the per-CVE workdir name (which
+    embeds the target function) cannot trigger a false positive on
+    unrelated crashes whose stack-trace lines include the build path.
+    """
     import re
     lowered = (text or "").lower()
+    # Drop anything that looks like an absolute path (e.g. the build dir
+    # `<runtime>/zday_<sha>_<function>/srcs/...`). Without this, a UBSAN
+    # report in mm/memcontrol.c whose path embeds the workdir name would
+    # match the target function string and be misclassified as
+    # target-related.
+    lowered = re.sub(r'/[^\s)\]]+', ' ', lowered)
     if target_info.get("function", "").lower() in lowered:
         return True
     for token in target_context.get("strong_tokens", set()):

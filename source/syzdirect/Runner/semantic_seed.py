@@ -22,6 +22,35 @@ import struct
 import subprocess
 
 
+def _extract_json(text):
+    """Extract and clean a JSON object from LLM output."""
+    if not text:
+        return None
+    text = re.sub(r"```(?:json)?\s*", "", text)
+    # Replace Python literals with JSON equivalents
+    text = re.sub(r"\bNone\b", "null", text)
+    text = re.sub(r"\bTrue\b", "true", text)
+    text = re.sub(r"\bFalse\b", "false", text)
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start < 0 or end <= start:
+        return None
+    snippet = text[start:end]
+    snippet = re.sub(r"//[^\n]*", "", snippet)
+    snippet = re.sub(r",\s*([}\]])", r"\1", snippet)
+    try:
+        return json.loads(snippet)
+    except json.JSONDecodeError:
+        pass
+    for close in range(len(snippet) - 1, -1, -1):
+        if snippet[close] == "}":
+            try:
+                return json.loads(snippet[:close + 1])
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
 def _rg_bin():
     """Resolve the ripgrep binary path, falling back to known locations."""
     path = shutil.which("rg")
@@ -702,14 +731,15 @@ def _detect_domain(target_file):
         return "tc_netlink"
     if "net/netlink" in target_file or "net/core/rtnetlink" in target_file:
         return "netlink"
+    if ("kernel/bpf" in target_file or "net/core/filter" in target_file or
+            "net/core/sock_map" in target_file or "net/core/skmsg" in target_file):
+        return "bpf"
     if "net/" in target_file:
         return "network"
     if "drivers/" in target_file:
         return "driver_ioctl"
     if "fs/" in target_file:
         return "filesystem"
-    if "kernel/bpf" in target_file or "net/core/filter" in target_file:
-        return "bpf"
     return "unknown"
 
 
@@ -887,14 +917,20 @@ class TCNetlinkEncoder(DomainEncoder):
         """Generate syzkaller programs from solved conditions."""
         programs = []
 
-        # Resolve attribute indices from specs
+        # Resolve attribute indices and sizes from specs. Sizes are needed
+        # because the same logical attr (e.g. "mask") is u16 for TCINDEX
+        # but u32 for FLOW — encoding the wrong width makes the validator
+        # reject the seed (payload size mismatch).
         idx_map = {}
+        size_map = {}
         for attr_name, spec in attr_specs.items():
             idx = spec.get("index")
             if idx is not None:
                 # Normalize: TCA_TCINDEX_HASH → hash
                 short = attr_name.split("_")[-1].lower()
                 idx_map[short] = idx
+                sz = _nla_type_size(spec.get("nla_type", ""))
+                size_map[short] = sz if sz in (1, 2, 4, 8) else 4
 
         hash_variants = attr_values.get("hash_variants", [
             {"hash": 0x10, "mask": 0x000f, "shift": 0},
@@ -913,8 +949,13 @@ class TCNetlinkEncoder(DomainEncoder):
                 opts += _nlattr_u32(1, h)  # fallback TCA_TCINDEX_HASH=1
 
             if "mask" in idx_map:
-                opts += _nlattr_u16(idx_map["mask"], mask)
+                # Pick width from spec — TCINDEX_MASK is u16, FLOW_MASK is u32.
+                if size_map.get("mask") == 2:
+                    opts += _nlattr_u16(idx_map["mask"], mask)
+                else:
+                    opts += _nlattr_u32(idx_map["mask"], mask)
             else:
+                # Fallback: assume TCINDEX-style mask at index 2 (u16).
                 opts += _nlattr_u16(2, mask)
 
             if "shift" in idx_map:
@@ -1153,9 +1194,25 @@ class GenericNetlinkEncoder(DomainEncoder):
         return plan.get("domain") in ("network", "netlink")
 
     def generate_seeds(self, plan):
-        # Generic: just produce socket + sendmsg skeleton
-        # LLM will fill in details via the prompt
-        return []
+        # Consume LLM-provided syz program text from the enrichment phase.
+        # For non-TC netlink families (netfilter/nft, generic netlink, rtnl)
+        # there is no hand-rolled Python encoder — the LLM (which knows
+        # syzlang well) produces the program text directly and we pass through.
+        enrichment = plan.get("llm_enrichment") or {}
+        variants = enrichment.get("seed_variants") or []
+        seeds = []
+        for vi, v in enumerate(variants):
+            if not isinstance(v, dict):
+                continue
+            text = (v.get("program") or "").strip()
+            if not text:
+                continue
+            seeds.append({
+                "name": f"sem_netlink_v{vi}",
+                "text": text,
+                "description": v.get("description", ""),
+            })
+        return seeds
 
 
 class IoctlEncoder(DomainEncoder):
@@ -1165,9 +1222,24 @@ class IoctlEncoder(DomainEncoder):
         return plan.get("domain") in ("driver_ioctl",)
 
     def generate_seeds(self, plan):
-        # Skeleton: open device + ioctl
-        # Specific ioctl numbers come from plan analysis
-        return []
+        # Same pattern as GenericNetlinkEncoder: pass through LLM-provided
+        # syz program text. The LLM constructs the open() + ioctl() sequence
+        # (with the right device path and ioctl cmd numbers) per variant.
+        enrichment = plan.get("llm_enrichment") or {}
+        variants = enrichment.get("seed_variants") or []
+        seeds = []
+        for vi, v in enumerate(variants):
+            if not isinstance(v, dict):
+                continue
+            text = (v.get("program") or "").strip()
+            if not text:
+                continue
+            seeds.append({
+                "name": f"sem_ioctl_v{vi}",
+                "text": text,
+                "description": v.get("description", ""),
+            })
+        return seeds
 
 
 # Encoder registry
@@ -1848,7 +1920,9 @@ Return ONLY JSON:
     {{"attr_name": "...", "correct_index": N, "correct_size": N, "reason": "..."}}
   ],
   "seed_variants": [
-    {{"description": "what this variant tests", "key_values": {{}}}}
+    {{"description": "what this variant tests",
+      "key_values": {{}},
+      "program": "<<complete valid syzkaller program text, REQUIRED for non-tc_netlink domains. Must be self-contained: open any needed fds, construct the precise message/ioctl/state sequence that reaches {plan['target_function']}, and trigger the bug class. Use syzlang (e.g. 'r0 = socket$nl_netfilter(0x10, 0x3, 0xc)\\nsendmsg$nl_netfilter(r0, &(0x7f0000000000)={{..., ANYBLOB=\\\"...\\\"}}, 0x0)'). Multi-message nft batches must wrap NFT_MSG_* in NFNL_MSG_BATCH_BEGIN/END.>>"}}
   ]
 }}"""
 
@@ -1857,11 +1931,9 @@ Return ONLY JSON:
         if not text:
             return plan
 
-        start, end = text.find("{"), text.rfind("}") + 1
-        if start < 0 or end <= start:
+        enrichment = _extract_json(text)
+        if not enrichment:
             return plan
-
-        enrichment = json.loads(text[start:end])
         plan["llm_enrichment"] = enrichment
 
         # Apply attr corrections

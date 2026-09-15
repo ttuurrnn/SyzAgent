@@ -9,11 +9,13 @@ the fuzzer's distance stagnates.
 
 import json
 import os
+import re
 import shlex
+import shutil
 import struct
 import subprocess
 import tempfile
-import re
+import time
 
 from syscall_normalize import load_syzkaller_call_names, normalize_syscall_name
 from syzlang_parser import get_db as _get_syzlang_db
@@ -43,49 +45,200 @@ def _fuzzy_kind_match(target_kind, all_kinds):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# LLM backend — optional CLI command with ollama fallback
+# LLM backend — optional CLI command with gemini/ollama fallback
 # ──────────────────────────────────────────────────────────────────────────
 
 _OLLAMA_MODEL = os.environ.get("SYZDIRECT_LLM_MODEL", "qwen2.5-coder:14b")
 _OLLAMA_URL = os.environ.get("SYZDIRECT_OLLAMA_URL", "http://localhost:11434")
 _LLM_CMD = os.environ.get("SYZDIRECT_LLM_CMD", "").strip()
+_LLM_BACKEND = os.environ.get("SYZDIRECT_LLM_BACKEND", "auto").strip().lower()
+_CODEX_MODEL = os.environ.get("SYZDIRECT_CODEX_MODEL", "gpt-5.4").strip()
+_CODEX_CMD = os.environ.get("SYZDIRECT_CODEX_CMD", "codex").strip()
+_CODEX_SANDBOX = os.environ.get("SYZDIRECT_CODEX_SANDBOX", "read-only").strip()
+_GEMINI_MODEL = os.environ.get("SYZDIRECT_GEMINI_MODEL", "").strip()
+_GEMINI_CMD = os.environ.get("SYZDIRECT_GEMINI_CMD", "gemini").strip()
 
 
-def _call_llm(prompt, timeout=180):
-    """Call an optional local LLM command or ollama. Returns response text or None."""
+def _codex_command(output_path):
+    return [
+        _CODEX_CMD,
+        "exec",
+        "--model",
+        _CODEX_MODEL or "gpt-5.4",
+        "--sandbox",
+        _CODEX_SANDBOX or "read-only",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "--color",
+        "never",
+        "--output-last-message",
+        output_path,
+        "-",
+    ]
+
+
+def _gemini_command():
+    args = [_GEMINI_CMD, "--prompt", "", "--output-format", "text", "--skip-trust"]
+    if _GEMINI_MODEL:
+        args.extend(["--model", _GEMINI_MODEL])
+
+    nvm_sh = os.path.expanduser("~/.nvm/nvm.sh")
+    if _GEMINI_CMD == "gemini" and os.path.exists(nvm_sh):
+        quoted = " ".join(shlex.quote(arg) for arg in args)
+        return ["bash", "-lc", f"source {shlex.quote(nvm_sh)} >/dev/null 2>&1; exec {quoted}"]
+    return args
+
+
+def _call_subprocess_llm(args, prompt, timeout, label):
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, start_new_session=True,
+        )
+        try:
+            stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            import signal
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                proc.kill()
+            proc.wait(timeout=5)
+            print(f"  [LLM] {label} timed out after {timeout}s")
+            return None
+        if stdout and stdout.strip():
+            text = stdout.strip()
+            print(f"  [LLM] {label} responded ({len(text)} chars)")
+            return text
+        if proc.returncode != 0:
+            print(f"  [LLM] {label} failed (rc={proc.returncode}): {(stderr or '')[:200]}")
+        else:
+            # Silent failure: exited cleanly but produced no output.  Common
+            # with gemini when run under nohup without a TTY, or with codex
+            # when the prompt is rejected internally without an error code.
+            stderr_preview = (stderr or "").strip()[:200]
+            print(f"  [LLM] {label} returned empty stdout (rc=0). "
+                  f"prompt_chars={len(prompt)}"
+                  + (f"  stderr={stderr_preview}" if stderr_preview else ""))
+    except (FileNotFoundError, OSError) as e:
+        print(f"  [LLM] {label} error: {e}")
+    return None
+
+
+def _call_codex_llm(prompt, timeout):
+    with tempfile.TemporaryDirectory(prefix="syzdirect-codex-") as tmpdir:
+        output_path = os.path.join(tmpdir, "last_message.txt")
+        text = _call_subprocess_llm(_codex_command(output_path), prompt, timeout, "codex")
+        if os.path.exists(output_path):
+            try:
+                with open(output_path, "r", encoding="utf-8") as handle:
+                    final_text = handle.read().strip()
+                if final_text:
+                    print(f"  [LLM] codex final message ({len(final_text)} chars)")
+                    return final_text
+            except OSError as exc:
+                print(f"  [LLM] codex output read error: {exc}")
+        return text
+
+
+def _extract_json(text):
+    """Extract and clean a JSON object from LLM output.
+
+    Handles common LLM quirks: markdown code fences, trailing commas,
+    inline comments, and extra text surrounding the JSON.
+    Returns parsed object or None.
+    """
+    if not text:
+        return None
+    # Strip markdown code fences (```json ... ``` or ``` ... ```)
+    text = re.sub(r"```(?:json)?\s*", "", text)
+    # Replace Python literals with JSON equivalents
+    text = re.sub(r"\bNone\b", "null", text)
+    text = re.sub(r"\bTrue\b", "true", text)
+    text = re.sub(r"\bFalse\b", "false", text)
+    # Find outermost { ... }
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start < 0 or end <= start:
+        return None
+    snippet = text[start:end]
+    # Remove JS-style // line comments
+    snippet = re.sub(r"//[^\n]*", "", snippet)
+    # Remove trailing commas before } or ]
+    snippet = re.sub(r",\s*([}\]])", r"\1", snippet)
+    try:
+        return json.loads(snippet)
+    except json.JSONDecodeError:
+        pass
+    # Last resort: try json.loads on progressively shorter substrings
+    # by finding the last valid closing brace
+    for close in range(len(snippet) - 1, start, -1):
+        if snippet[close] == "}":
+            try:
+                return json.loads(snippet[:close + 1])
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
+def _json_only_contract(schema_text, extra_rules=None):
+    rules = [
+        "Return ONLY one valid JSON object.",
+        "Do not use markdown fences.",
+        "Do not add commentary before or after the JSON.",
+        "If unsure about a syscall name, omit it instead of guessing.",
+        "Do not emit empty strings, nulls, or placeholder names in syscall fields.",
+    ]
+    if extra_rules:
+        rules.extend(extra_rules)
+    rule_block = "\n".join(f"- {rule}" for rule in rules)
+    return f"{schema_text}\nRules:\n{rule_block}"
+
+
+def _dedupe_keep_order(values):
+    seen = set()
+    result = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _sanitize_syscall_entries(entries, target_file, *, min_entries=1, max_entries=4, max_relate=6):
+    validated = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        target = normalize_syscall_name(entry.get("Target", ""), target_file)
+        if not target:
+            continue
+        relates = []
+        for raw_name in entry.get("Relate", []) or []:
+            normalized = normalize_syscall_name(raw_name, target_file)
+            if normalized and normalized != target:
+                relates.append(normalized)
+        relates = _dedupe_keep_order(relates)[:max_relate]
+        validated.append({"Target": target, "Relate": relates})
+
+    validated = _dedupe_keep_order(
+        [json.dumps(entry, sort_keys=True) for entry in validated]
+    )
+    validated = [json.loads(entry) for entry in validated]
+    if max_entries > 0:
+        validated = validated[:max_entries]
+    if len(validated) < min_entries:
+        return []
+    return validated
+
+
+def _try_ollama(prompt, timeout):
+    """Single ollama generation call. Returns text or None."""
     import urllib.request
     import urllib.error
-
-    if _LLM_CMD:
-        try:
-            proc = subprocess.Popen(
-                shlex.split(_LLM_CMD),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, start_new_session=True,
-            )
-            try:
-                stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
-            except subprocess.TimeoutExpired:
-                import signal
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except OSError:
-                    proc.kill()
-                proc.wait(timeout=5)
-                print(f"  [LLM] command timed out after {timeout}s")
-                stdout = None
-                stderr = None
-            if stdout and stdout.strip():
-                text = stdout.strip()
-                print(f"  [LLM] command responded ({len(text)} chars)")
-                return text
-            elif proc.returncode != 0:
-                print(f"  [LLM] command failed (rc={proc.returncode}): {(stderr or '')[:200]}")
-        except (FileNotFoundError, OSError) as e:
-            print(f"  [LLM] command error: {e}")
-
-    # Fallback to ollama (local)
     try:
         req_data = json.dumps({
             "model": _OLLAMA_MODEL,
@@ -103,38 +256,382 @@ def _call_llm(prompt, timeout=180):
             if text:
                 print(f"  [LLM] ollama responded ({len(text)} chars)")
                 return text
+            print("  [LLM] ollama returned empty response")
     except urllib.error.URLError as e:
         print(f"  [LLM] ollama unavailable: {e}")
     except Exception as e:
         print(f"  [LLM] ollama error: {e}")
+    return None
+
+
+def _call_llm(prompt, timeout=600, retries=0):
+    """Call LLM backends in priority order. Returns response text or None.
+
+    Default priority (backend="auto"): ollama → codex → gemini.  Ollama is the
+    local model — cheap and unlimited — so it absorbs the bulk of validator /
+    trigger-condition traffic that would otherwise burn codex rate limits.
+    Codex (gpt-5.4) is the smarter cloud fallback for cases where ollama
+    output is unusable.
+
+    Explicit backend choices (SYZDIRECT_LLM_BACKEND=codex|gemini|ollama)
+    restrict to that backend only.
+
+    retries: number of additional attempts on empty/timeout.  Defaults to 0;
+    semantic validator and trigger enhancer opt in to retries=1.
+    """
+    for attempt in range(retries + 1):
+        if _LLM_CMD:
+            text = _call_subprocess_llm(shlex.split(_LLM_CMD), prompt, timeout, "command")
+            if text:
+                return text
+
+        # Local ollama first (when backend is auto or ollama).  Falls back
+        # automatically if ollama is unreachable.
+        if _LLM_BACKEND in ("ollama", "auto"):
+            text = _try_ollama(prompt, timeout)
+            if text:
+                return text
+            if _LLM_BACKEND == "ollama" and attempt >= retries:
+                return None
+
+        if _LLM_BACKEND in ("codex", "auto"):
+            text = _call_codex_llm(prompt, timeout)
+            if text:
+                return text
+            if _LLM_BACKEND == "codex" and attempt >= retries:
+                return None
+
+        if _LLM_BACKEND in ("gemini", "auto"):
+            text = _call_subprocess_llm(_gemini_command(), prompt, timeout, "gemini")
+            if text:
+                return text
+            if _LLM_BACKEND == "gemini" and attempt >= retries:
+                return None
+
+        if attempt < retries:
+            print(f"  [LLM] empty/failed (attempt {attempt + 1}/{retries + 1}), retrying in 5s...")
+            time.sleep(5)
 
     return None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Context-gathering helpers for enriched LLM prompts
+# ──────────────────────────────────────────────────────────────────────────
+
+def _get_target_function_source(src_root, file_path, function_name, max_lines=80):
+    """Extract the body of function_name from src_root/file_path. Returns '' on failure."""
+    if not src_root or not file_path or not function_name:
+        return ""
+    full_path = os.path.join(src_root, file_path)
+    if not os.path.isfile(full_path):
+        return ""
+    try:
+        with open(full_path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return ""
+
+    fn_re = re.compile(r'\b' + re.escape(function_name) + r'\s*\(')
+    start = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if fn_re.search(line) and not stripped.startswith("//") and not stripped.startswith("*"):
+            start = i
+            break
+    if start is None:
+        return ""
+
+    brace_start = None
+    for i in range(start, min(start + 15, len(lines))):
+        if "{" in lines[i]:
+            brace_start = i
+            break
+    if brace_start is None:
+        return ""
+
+    depth, end = 0, brace_start
+    for i in range(brace_start, min(brace_start + max_lines + 30, len(lines))):
+        depth += lines[i].count("{") - lines[i].count("}")
+        if depth <= 0:
+            end = i
+            break
+
+    extracted = "".join(lines[max(0, start - 2):min(end + 1, len(lines))])
+    result_lines = extracted.splitlines()
+    if len(result_lines) > max_lines:
+        extracted = "\n".join(result_lines[:max_lines]) + "\n... (truncated)"
+    return extracted
+
+
+def _normalize_fix_commit(fix_commit):
+    """Strip trailing `~N` suffixes from a commit ref.
+
+    The 0-day pipeline passes `--commit <fix>~1` (the vulnerable parent) as
+    the build commit, and `target.commit` carries that string verbatim. For
+    diff / commit-msg extraction we want the FIX commit itself, so the
+    leading sha (everything before the first `~`) is the right anchor.
+    """
+    if not fix_commit:
+        return ""
+    head = fix_commit.split("~", 1)[0]
+    return head.strip()
+
+
+def _get_cve_patch_diff(src_root, fix_commit, max_lines=150):
+    """Return git diff fix_commit~1..fix_commit. Returns '' on failure.
+
+    Tries `src_root` first; if that's a shallow clone (typical for the
+    per-CVE workdir checked out at HEAD), falls back to the full mainline
+    tree at $SYZDIRECT_LINUX_TEMPLATE which has full history.
+    """
+    fix_commit = _normalize_fix_commit(fix_commit)
+    if not fix_commit:
+        return ""
+
+    def _try_tree(tree):
+        if not tree or not os.path.isdir(tree):
+            return ""
+        try:
+            result = subprocess.run(
+                ["git", "diff", f"{fix_commit}~1", fix_commit],
+                cwd=tree, capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return ""
+            return result.stdout
+        except Exception:
+            return ""
+
+    raw = _try_tree(src_root)
+    if not raw:
+        raw = _try_tree(os.environ.get("SYZDIRECT_LINUX_TEMPLATE", ""))
+    if not raw:
+        return ""
+    try:
+        lines = raw.splitlines()
+        if len(lines) > max_lines:
+            lines = lines[:max_lines] + [f"... (truncated, {len(lines) - max_lines} more lines)"]
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+def _get_cve_commit_message(src_root, fix_commit, max_lines=40):
+    """Return the commit message body for `fix_commit`. Returns '' on failure.
+
+    The patch diff shows WHAT changed; the commit message explains WHY and
+    often includes the exact trigger description (e.g. "AF_PACKET TX_RING
+    over IPIP tunnel with non-linear packets"). That information is the
+    single highest-signal input we can give the seed-generation LLM — without
+    it, the model only sees the syntactic diff and has to guess the trigger.
+
+    Falls back from `src_root` to $SYZDIRECT_LINUX_TEMPLATE the same way
+    `_get_cve_patch_diff` does.
+    """
+    fix_commit = _normalize_fix_commit(fix_commit)
+    if not fix_commit:
+        return ""
+
+    def _try_tree(tree):
+        if not tree or not os.path.isdir(tree):
+            return ""
+        try:
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%B", fix_commit],
+                cwd=tree, capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return ""
+            return result.stdout
+        except Exception:
+            return ""
+
+    raw = _try_tree(src_root)
+    if not raw:
+        raw = _try_tree(os.environ.get("SYZDIRECT_LINUX_TEMPLATE", ""))
+    if not raw:
+        return ""
+    try:
+        # Drop trailing trailer lines (Signed-off-by:, Reported-by:, …) —
+        # they're metadata noise that crowds out the bug explanation.
+        kept = []
+        for line in raw.splitlines():
+            low = line.lower().lstrip()
+            if low.startswith(("signed-off-by:", "reported-by:", "tested-by:",
+                               "reviewed-by:", "acked-by:", "cc:", "link:",
+                               "co-developed-by:", "suggested-by:", "fixes:")):
+                continue
+            kept.append(line)
+        if len(kept) > max_lines:
+            kept = kept[:max_lines] + [f"... (truncated, {len(kept) - max_lines} more lines)"]
+        return "\n".join(kept).strip()
+    except Exception:
+        return ""
+
+
+def _get_call_chain_hints(k2s_path, target_function, max_entries=6):
+    """Return a text block of syscalls→target mappings from k2s.json. Returns '' on failure.
+
+    k2s.json maps kernel_function → {resource_variant: [syzkaller_names]}.
+    We look for the target directly; if absent, collect all unique syscall names
+    from k2s as potential subsystem entry points.
+    """
+    if not k2s_path or not target_function or not os.path.isfile(k2s_path):
+        return ""
+    try:
+        with open(k2s_path) as f:
+            k2s = json.load(f)
+    except Exception:
+        return ""
+
+    if not isinstance(k2s, dict):
+        return ""
+
+    # Direct hit — target function is known to the interface analyzer
+    if target_function in k2s:
+        syscalls = set()
+        for variant_map in k2s[target_function].values():
+            syscalls.update(variant_map if isinstance(variant_map, list) else [])
+        if syscalls:
+            listed = sorted(syscalls)[:max_entries]
+            return (
+                f"SYSCALL→TARGET CALL CHAIN (direct):\n"
+                f"  {target_function} is reachable via:\n"
+                + "\n".join(f"  - {s}" for s in listed)
+            )
+
+    # Indirect — collect all unique syscall names as subsystem hints
+    all_syscalls: set = set()
+    for func_map in k2s.values():
+        if isinstance(func_map, dict):
+            for variant_list in func_map.values():
+                if isinstance(variant_list, list):
+                    all_syscalls.update(variant_list)
+    if not all_syscalls:
+        return ""
+    listed = sorted(all_syscalls)[:max_entries]
+    return (
+        f"SUBSYSTEM ENTRY POINTS (from interface analysis, target not directly mapped):\n"
+        + "\n".join(f"  - {s}" for s in listed)
+    )
+
+
+def _get_syzlang_for_subsystem(target_file, target_function, max_syscalls=6):
+    """Return syzlang dependency text for syscalls matching the subsystem of target_file.
+
+    Uses the global syzlang DB and infers the subsystem keyword from file path.
+    """
+    try:
+        db = _get_syzlang_db()
+    except Exception:
+        return ""
+    if not db or not db.syscalls:
+        return ""
+
+    # Infer subsystem keywords from the file path.
+    # e.g. "net/vmw_vsock/af_vsock.c" → raw parts ["vmw_vsock", "af_vsock"]
+    # → expand with sub-tokens ["vmw", "vsock", "af", "vsock"] → dedupe → ["vmw", "vsock", "af"]
+    _SKIP_PARTS = {"net", "kernel", "drivers", "fs", "include", "linux", "uapi"}
+    _SKIP_TOKENS = {"af", "vmw", "nf", "ip", "tcp", "udp", "if", "in", "out", "new", "old"}
+    parts = (target_file or "").replace("\\", "/").split("/")
+    raw_parts = []
+    for part in reversed(parts):
+        part = part.replace(".c", "").replace(".h", "").lower()
+        if part and part not in _SKIP_PARTS:
+            raw_parts.append(part)
+        if len(raw_parts) >= 2:
+            break
+
+    keywords = set()
+    for raw in raw_parts:
+        keywords.add(raw)
+        for token in raw.split("_"):
+            if token and len(token) >= 4 and token not in _SKIP_TOKENS:
+                keywords.add(token)
+    if not keywords:
+        return ""
+
+    matched = []
+    for name, sc in db.syscalls.items():
+        lower_name = name.lower()
+        if any(kw in lower_name for kw in keywords):
+            matched.append(name)
+
+    if not matched:
+        return ""
+
+    blocks = []
+    for sc_name in sorted(matched)[:max_syscalls]:
+        block = db.format_for_prompt(sc_name)
+        if block:
+            blocks.append(block)
+
+    if not blocks:
+        return ""
+    return "RELEVANT SYZLANG DESCRIPTIONS:\n" + "\n\n".join(blocks)
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # LLM-based CVE analysis
 # ──────────────────────────────────────────────────────────────────────────
 
-def llm_analyze_cve(cve_id, kernel_commit, target_function, file_path):
+def llm_analyze_cve(cve_id, kernel_commit, target_function, file_path,
+                    src_root=None, fix_commit=None, k2s_path=None):
     """Ask LLM for syzkaller syscall suggestions. Returns dict or None."""
+    contract = _json_only_contract(
+        '{"syscalls": [{"Target": "name$variant", "Relate": ["setup1", "setup2"]}]}',
+        extra_rules=[
+            "Include 1-3 syscall entries.",
+            "Each Relate list should contain 3-6 setup syscalls when possible.",
+            "Use exact syzkaller names such as sendmsg$nl_route_sched or bpf$PROG_LOAD.",
+        ],
+    )
+
+    extra_ctx_parts = []
+
+    func_src = _get_target_function_source(src_root, file_path, target_function)
+    if func_src:
+        extra_ctx_parts.append(f"TARGET FUNCTION SOURCE ({target_function}):\n```c\n{func_src}\n```")
+
+    commit_msg = _get_cve_commit_message(src_root, fix_commit)
+    if commit_msg:
+        extra_ctx_parts.append(
+            "VULN HINT (fix commit message — explains the trigger):\n"
+            f"```\n{commit_msg}\n```"
+        )
+
+    patch_diff = _get_cve_patch_diff(src_root, fix_commit)
+    if patch_diff:
+        extra_ctx_parts.append(f"CVE FIX PATCH DIFF:\n```diff\n{patch_diff}\n```")
+
+    chain_hints = _get_call_chain_hints(k2s_path, target_function)
+    if chain_hints:
+        extra_ctx_parts.append(chain_hints)
+
+    syzlang_ctx = _get_syzlang_for_subsystem(file_path, target_function)
+    if syzlang_ctx:
+        extra_ctx_parts.append(syzlang_ctx)
+
+    extra_ctx = ("\n\n" + "\n\n".join(extra_ctx_parts)) if extra_ctx_parts else ""
+
     prompt = (
         "You are a Linux kernel security researcher.\n"
         f"CVE: {cve_id}\nKernel commit: {kernel_commit}\n"
-        f"Target function: {target_function}\nFile: {file_path}\n\n"
+        f"Target function: {target_function}\nFile: {file_path}\n"
+        f"{extra_ctx}\n\n"
         "Suggest the most relevant syzkaller syscalls to reach this function.\n"
-        "Return ONLY valid JSON:\n"
-        '{"syscalls": [{"Target": "name$variant", "Relate": ["setup1", "setup2"]}]}\n'
-        "Use exact syzkaller naming (e.g. sendmsg$nl_route_sched, setsockopt$packet_fanout, "
-        "bpf$PROG_LOAD, connect$vsock_stream). 1-3 Target entries, 3-6 Relate each."
+        f"{contract}\n"
     )
-    try:
-        text = _call_llm(prompt, timeout=120)
-        if text:
-            start, end = text.find("{"), text.rfind("}") + 1
-            if start >= 0 and end > start:
-                return json.loads(text[start:end])
-    except json.JSONDecodeError as e:
-        print(f"  [LLM] JSON parse error: {e}")
+    text = _call_llm(prompt, timeout=600)
+    if text:
+        result = _extract_json(text)
+        if result is not None:
+            syscalls = _sanitize_syscall_entries(result.get("syscalls", []), file_path, min_entries=1, max_entries=3)
+            if syscalls:
+                return {"syscalls": syscalls}
+            print("  [LLM] syscall JSON was parsed but contained no valid normalized entries")
+        print(f"  [LLM] JSON parse error: could not extract JSON from response")
     return None
 
 
@@ -1089,7 +1586,9 @@ def llm_enhance_callfile_for_distance(current_callfile, roadmap,
                                        target_function, target_file,
                                        source_snippets="",
                                        closest_program=None, closest_dist=None,
-                                       reverse_trace=""):
+                                       reverse_trace="",
+                                       src_root=None, fix_commit=None,
+                                       k2s_path=None):
     """Ask the LLM to suggest better syscalls based on distance roadmap."""
     if not roadmap:
         return None
@@ -1112,50 +1611,313 @@ def llm_enhance_callfile_for_distance(current_callfile, roadmap,
         print(f"  [LLM-dist] seed_planner failed ({e}), falling back")
         compact_plan = f"TARGET: {target_function} in {target_file}\nCURRENT DISTANCE: {current_dist}"
 
+    # ── Extra context (target source, patch diff, call chains, syzlang) ─
+    extra_ctx_parts = []
+    func_src = _get_target_function_source(src_root, target_file, target_function)
+    if func_src:
+        extra_ctx_parts.append(f"TARGET FUNCTION SOURCE ({target_function}):\n```c\n{func_src}\n```")
+    commit_msg = _get_cve_commit_message(src_root, fix_commit)
+    if commit_msg:
+        extra_ctx_parts.append(
+            "VULN HINT (fix commit message — explains the trigger):\n"
+            f"```\n{commit_msg}\n```"
+        )
+    patch_diff = _get_cve_patch_diff(src_root, fix_commit)
+    if patch_diff:
+        extra_ctx_parts.append(f"CVE FIX PATCH DIFF:\n```diff\n{patch_diff}\n```")
+    chain_hints = _get_call_chain_hints(k2s_path, target_function)
+    if chain_hints:
+        extra_ctx_parts.append(chain_hints)
+    syzlang_ctx = _get_syzlang_for_subsystem(target_file, target_function)
+    if syzlang_ctx:
+        extra_ctx_parts.append(syzlang_ctx)
+    extra_ctx = ("\n\n" + "\n\n".join(extra_ctx_parts) + "\n") if extra_ctx_parts else ""
+
     prompt = f"""You are a Linux kernel security researcher helping a distance-guided fuzzer.
 
 {compact_plan}
-
+{extra_ctx}
 CURRENT CALLFILE (syscalls being fuzzed):
 {json.dumps(current_callfile, indent=2)}
 
 Suggest better syscalls to reach {target_function}. Follow the SYSCALL SEQUENCE above.
 
-Return ONLY valid JSON:
-{{"syscalls": [{{"Target": "name$variant", "Relate": ["setup1", "setup2", ...]}}], "reasoning": "brief explanation"}}
-
-Use exact syzkaller naming (e.g. sendmsg$nl_route_sched, setsockopt$packet_fanout, bpf$PROG_LOAD).
-Provide 1-4 Target entries with 3-6 Relate syscalls each."""
+{_json_only_contract(
+    '{"syscalls": [{"Target": "name$variant", "Relate": ["setup1", "setup2", "..."]}], "reasoning": "brief explanation"}',
+    extra_rules=[
+        "Provide 1-4 Target entries.",
+        "Each Relate list should contain 3-6 setup syscalls when possible.",
+        "Prefer syscall families already supported by the roadmap or current callfile unless a new family is clearly justified.",
+    ],
+)}"""
 
     try:
-        text = _call_llm(prompt, timeout=180)
+        text = _call_llm(prompt, timeout=600)
         if not text:
             return None
-        start, end = text.find("{"), text.rfind("}") + 1
-        if start >= 0 and end > start:
-            result = json.loads(text[start:end])
+        result = _extract_json(text)
+        if result is not None:
             reasoning = result.pop("reasoning", "")
             if reasoning:
                 print(f"  [LLM-dist] Reasoning: {reasoning}")
-            syscalls = result.get("syscalls", [])
+            syscalls = _sanitize_syscall_entries(result.get("syscalls", []), target_file, min_entries=1, max_entries=4)
             if syscalls:
-                validated = []
-                for entry in syscalls:
-                    target = entry.get("Target", "")
-                    normalized = normalize_syscall_name(target, target_file)
-                    if normalized:
-                        entry["Target"] = normalized
-                    relates = []
-                    for r_name in entry.get("Relate", []):
-                        nr = normalize_syscall_name(r_name, target_file)
-                        if nr:
-                            relates.append(nr)
-                    entry["Relate"] = relates or entry.get("Relate", [])
-                    validated.append(entry)
-                validated = _validate_r4_entries(validated, current_callfile, roadmap)
+                validated = _validate_r4_entries(syscalls, current_callfile, roadmap)
                 return validated
-    except json.JSONDecodeError as e:
-        print(f"  [LLM-dist] JSON parse error: {e}")
+        else:
+            print(f"  [LLM-dist] JSON parse error: could not extract JSON from response")
+    except Exception as e:
+        print(f"  [LLM-dist] error: {e}")
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# LLM-driven callfile semantic validator
+# ──────────────────────────────────────────────────────────────────────────
+
+def llm_validate_callfile_semantics(
+    current_callfile, target_function, target_file,
+    src_root=None, fix_commit=None, k2s_path=None,
+    cve_kind=None, cve_subject=None,
+):
+    """Validate that the callfile semantically matches the CVE trigger requirements.
+
+    Returns dict: {"valid": bool, "issues": [str], "fixed_entries": list|None}
+    Returns None on LLM failure.
+    """
+    func_source = _get_target_function_source(src_root, target_file, target_function)
+    commit_msg  = _get_cve_commit_message(src_root, fix_commit)
+    patch_diff  = _get_cve_patch_diff(src_root, fix_commit)
+    call_hints  = _get_call_chain_hints(k2s_path, target_function)
+    syzlang_ctx = _get_syzlang_for_subsystem(target_file, target_function)
+
+    kind_str = ", ".join(cve_kind) if cve_kind else "unknown"
+    subject_str = cve_subject or "(no subject)"
+
+    callfile_json = json.dumps(current_callfile, indent=2)
+
+    context_blocks = []
+    if func_source:
+        context_blocks.append(f"## Target Function Source\n```c\n{func_source}\n```")
+    if commit_msg:
+        context_blocks.append(f"## Vuln Hint (fix commit message)\n```\n{commit_msg}\n```")
+    if patch_diff:
+        context_blocks.append(f"## CVE Fix Patch\n```diff\n{patch_diff}\n```")
+    if call_hints:
+        context_blocks.append(f"## Call Chain Hints (kernel→syscall)\n{call_hints}")
+    if syzlang_ctx:
+        context_blocks.append(f"## Relevant Syzlang Descriptions\n{syzlang_ctx}")
+
+    context_str = "\n\n".join(context_blocks) if context_blocks else "(no extra context)"
+
+    kind_guidance = ""
+    if cve_kind:
+        if "UAF" in cve_kind:
+            kind_guidance = (
+                "- UAF bug: REQUIRE 3 separate Target entries reflecting alloc/use/free:\n"
+                "    1) Target = the syscall that ALLOCATES the vulnerable object\n"
+                "       (e.g. sendmsg$nl_netfilter sending NFT_MSG_NEWOBJ; socket+bind for sk objects)\n"
+                "    2) Target = the syscall that USES the object (triggers the access path)\n"
+                "       (e.g. sendto$inet for traffic; ioctl for state change)\n"
+                "    3) Target = the syscall that FREES the object\n"
+                "       (e.g. close for socket release; sendmsg$nl_netfilter sending NFT_MSG_DELOBJ)\n"
+                "  Each Target's Relate MUST list its own setup prerequisites independently.\n"
+            )
+        if "RACE" in cve_kind:
+            kind_guidance += (
+                "- Race condition: REQUIRE separate Target entries for EACH racing op:\n"
+                "    1) Target = first racing operation (e.g. close/release path)\n"
+                "    2) Target = second racing operation (e.g. ioctl/sendmsg event,\n"
+                "       sendmsg$nl_route NETDEV_UP, concurrent NEWOBJ/DELOBJ)\n"
+                "  Both targets MUST share the resource via Relate so syzkaller schedules\n"
+                "  them concurrently. If a kernel event (e.g. NETDEV_UP) is involved, the\n"
+                "  triggering syscall (sendmsg$nl_route, ioctl$sock_inet_SIOCSIFFLAGS, etc.)\n"
+                "  must be present as one of the Targets, not just in Relate.\n"
+            )
+
+    prompt = f"""You are a Linux kernel security expert analyzing a directed fuzzing callfile.
+
+## CVE Information
+- Target function: {target_function}
+- Target file: {target_file}
+- Bug class: {kind_str}
+- Fix commit subject: {subject_str}
+
+{context_str}
+
+## Current Callfile
+```json
+{callfile_json}
+```
+
+## Task
+Determine whether this callfile will lead the fuzzer to the correct syscall path
+that can trigger the vulnerability. Answer these questions:
+
+1. Which syscall actually calls {target_function}? (check source + call chain hints)
+2. Does the callfile contain that syscall as a Target or Relate?
+3. Are all prerequisite setup steps present? (socket creation, bind, object setup)
+{kind_guidance}
+4. Are there irrelevant syscalls that will produce false distance-0 hits?
+
+Return ONLY a JSON object:
+{{
+  "valid": true or false,
+  "issues": ["short description of each problem found"],
+  "fixed_entries": [
+    {{"Target": "correct_syscall$variant", "Relate": ["setup1", "setup2"]}},
+    ...
+  ]
+}}
+
+Rules:
+- "valid": true if the callfile is semantically correct for triggering this CVE
+- "valid": false if key syscalls are missing or wrong targets are set
+- "fixed_entries": corrected callfile entries if valid=false, null if valid=true
+- Use exact syzkaller syscall names (e.g. socket$packet, close, setsockopt$packet_fanout)
+- Up to 5 Target entries, 5 Relate entries each (use the full count for UAF/RACE
+  to express alloc/use/free or both racing ops — do NOT collapse the lifecycle
+  into one Target)
+- If you cannot determine the correct syscalls, set fixed_entries to null
+"""
+
+    # Bump from 120s — codex can take 100-200s on large netfilter functions
+    # (e.g. nf_tables_addchain) when the prompt context is ~25K tokens.
+    response = _call_llm(prompt, timeout=300, retries=1)
+    if not response:
+        return None
+
+    parsed = _extract_json(response)
+    if not parsed or not isinstance(parsed, dict):
+        return None
+
+    valid = bool(parsed.get("valid", True))
+    issues = parsed.get("issues", [])
+    if not isinstance(issues, list):
+        issues = [str(issues)]
+
+    fixed_raw = parsed.get("fixed_entries")
+    fixed_entries = None
+    if fixed_raw and isinstance(fixed_raw, list):
+        fixed_entries = _sanitize_syscall_entries(
+            fixed_raw, target_file, min_entries=1, max_entries=5
+        )
+
+    print(f"  [semantic-validator] valid={valid}  issues={issues[:2]}")
+    return {"valid": valid, "issues": issues, "fixed_entries": fixed_entries}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# LLM-driven trigger-condition analysis (dist=0, no crash yet)
+# ──────────────────────────────────────────────────────────────────────────
+
+def llm_enhance_for_trigger_condition(
+    current_callfile, target_function, target_file,
+    src_root=None, fix_commit=None, k2s_path=None,
+    closest_programs=None, dist0_rounds=0,
+):
+    """Ask LLM for refined callfile entries when dist=0 but no crash has occurred.
+
+    At dist=0 the fuzzer is reaching the target function but not triggering the
+    vulnerability. This function injects target source, patch diff, call chain
+    context, and sample programs that achieved dist=0, then asks the LLM to
+    identify the specific trigger conditions (race window, argument values, kernel
+    object state) needed to reproduce the bug.
+
+    Returns a list of callfile entries or None.
+    """
+    extra_ctx_parts = []
+
+    func_src = _get_target_function_source(src_root, target_file, target_function)
+    if func_src:
+        extra_ctx_parts.append(
+            f"TARGET FUNCTION SOURCE ({target_function}):\n```c\n{func_src}\n```"
+        )
+
+    commit_msg = _get_cve_commit_message(src_root, fix_commit)
+    if commit_msg:
+        extra_ctx_parts.append(
+            "VULN HINT (fix commit message — describes the exact trigger):\n"
+            f"```\n{commit_msg}\n```"
+        )
+
+    patch_diff = _get_cve_patch_diff(src_root, fix_commit)
+    if patch_diff:
+        extra_ctx_parts.append(f"CVE FIX PATCH DIFF (reveals the vulnerable code path):\n```diff\n{patch_diff}\n```")
+
+    chain_hints = _get_call_chain_hints(k2s_path, target_function)
+    if chain_hints:
+        extra_ctx_parts.append(chain_hints)
+
+    syzlang_ctx = _get_syzlang_for_subsystem(target_file, target_function)
+    if syzlang_ctx:
+        extra_ctx_parts.append(syzlang_ctx)
+
+    programs_ctx = ""
+    if closest_programs:
+        snippets = []
+        for prog_text, dist in closest_programs[:3]:
+            snippets.append(f"[dist={dist}]\n{prog_text[:600]}")
+        programs_ctx = (
+            "\nSAMPLE PROGRAMS THAT REACHED dist=0 (target function executed, no crash yet):\n"
+            + "\n---\n".join(snippets)
+        )
+
+    extra_ctx = ("\n\n" + "\n\n".join(extra_ctx_parts)) if extra_ctx_parts else ""
+
+    contract = _json_only_contract(
+        '{"syscalls": [{"Target": "name$variant", "Relate": ["setup1", "setup2"]}], "reasoning": "..."}',
+        extra_rules=[
+            "Provide 1-5 Target entries (use the full count for UAF alloc/use/free "
+            "or RACE pairs; do NOT collapse the lifecycle into one Target).",
+            "Focus on the SPECIFIC trigger conditions for the vulnerability: exact flag values, "
+            "object state, race conditions, or execution sequence.",
+            "Use exact syzkaller syscall names.",
+            "Preserve syscalls from the current callfile that are reaching the target; "
+            "refine rather than replace unless a fundamental change is needed.",
+        ],
+    )
+
+    prompt = f"""You are a Linux kernel security researcher analyzing a kernel vulnerability.
+
+The directed fuzzer has reached the target function ({target_function}) with distance=0
+for {dist0_rounds} consecutive round(s), but has NOT triggered a crash yet.
+
+This means the fuzzer IS calling the right syscalls to reach the function, but the
+specific inputs, kernel object state, or execution sequence needed to trigger the bug
+have not been found yet.
+{extra_ctx}
+
+CURRENT CALLFILE (syscalls being used):
+{json.dumps(current_callfile, indent=2)}
+{programs_ctx}
+
+Based on the target function source, the CVE fix patch, and the sample programs:
+1. Identify what specific conditions are needed to trigger the vulnerability
+2. Suggest refined syscall entries that focus on those trigger conditions
+3. Consider: race conditions, specific flag combinations, object lifecycle states,
+   sequence ordering, or privilege requirements
+
+{contract}"""
+
+    try:
+        text = _call_llm(prompt, timeout=600, retries=1)
+        if not text:
+            return None
+        result = _extract_json(text)
+        if result is not None:
+            reasoning = result.pop("reasoning", "")
+            if reasoning:
+                print(f"  [LLM-trigger] Reasoning: {reasoning}")
+            syscalls = _sanitize_syscall_entries(
+                result.get("syscalls", []), target_file, min_entries=1, max_entries=5,
+            )
+            if syscalls:
+                return syscalls
+        else:
+            print("  [LLM-trigger] JSON parse error: could not extract JSON from response")
+    except Exception as e:
+        print(f"  [LLM-trigger] error: {e}")
     return None
 
 
@@ -2190,7 +2952,8 @@ def llm_generate_seed_program(roadmap, source_snippets, target_function, target_
                                current_callfile, syz_db_path=None, output_dir=None,
                                closest_program=None, closest_dist=None,
                                reverse_trace="", syz_resource_chain="",
-                               agent_context=""):
+                               agent_context="",
+                               src_root=None, commit_sha=None):
     """Ask the LLM to generate syzkaller seed programs based on the distance roadmap.
 
     Generates concrete syzkaller program text that exercises kernel paths leading
@@ -2237,14 +3000,52 @@ def llm_generate_seed_program(roadmap, source_snippets, target_function, target_
         print(f"  [LLM-seed] seed_planner failed ({e}), falling back to minimal plan")
         compact_plan = f"TARGET: {target_function} in {target_file}\nCURRENT DISTANCE: {current_dist}"
 
+    # Pull the actual target function source + (if available) the recent commit
+    # diff that introduced the code. These give the LLM enough context to
+    # reason about bug classes instead of just generating reach-the-function
+    # seeds.
+    bug_ctx_parts = []
+    if src_root and target_function and target_file:
+        try:
+            _func_src = _get_target_function_source(src_root, target_file, target_function)
+        except Exception:
+            _func_src = ""
+        if _func_src:
+            bug_ctx_parts.append(
+                f"TARGET FUNCTION SOURCE ({target_function}):\n```c\n{_func_src}\n```"
+            )
+    if src_root and commit_sha:
+        try:
+            _msg = _get_cve_commit_message(src_root, commit_sha)
+        except Exception:
+            _msg = ""
+        if _msg:
+            bug_ctx_parts.append(
+                "VULN HINT (commit message — explains why this code matters):\n"
+                f"```\n{_msg}\n```"
+            )
+        try:
+            _diff = _get_cve_patch_diff(src_root, commit_sha)
+        except Exception:
+            _diff = ""
+        if _diff:
+            bug_ctx_parts.append(
+                "RELEVANT COMMIT DIFF (the code added/changed here likely contains the bug):\n"
+                f"```diff\n{_diff}\n```"
+            )
+    bug_ctx = ("\n\n" + "\n\n".join(bug_ctx_parts)) if bug_ctx_parts else ""
+
     prompt = f"""You are a Linux kernel fuzzing expert. Generate syzkaller seed programs.
 
 {compact_plan}
-{agent_context}
+{agent_context}{bug_ctx}
 
-Before generating programs, classify the target using the taxonomy above and choose exactly one blocking layer.
-Then generate 2 syzkaller programs that trigger the kernel path to {target_function}.
-Follow the SYSCALL SEQUENCE above. Each program should be a complete sequence and should attack only the selected blocking layer.
+ANALYZE-FIRST WORKFLOW (do not skip):
+1. From the target function source and (if present) the commit diff above, identify the most likely bug classes — e.g. OOB read in nested-header parsing, missing bounds check on a user-controlled length, UAF in a destroy/teardown path, missing RCU grace period, integer wraparound, race window between alloc/use/free.
+2. Pick the single bug hypothesis most consistent with the code, and the specific CONDITION (input shape, object state, sequencing) that would trigger it. Write that hypothesis explicitly in the JSON `bug_hypothesis` field.
+3. Then generate 2-4 syzkaller programs that PROBE that exact condition — boundary lengths, malformed nesting, alloc-then-immediately-free, conflicting flags — not just generic reach-the-function programs.
+
+Also classify the target using the taxonomy above and choose exactly one blocking layer. Follow the SYSCALL SEQUENCE. Each program should be a complete sequence.
 
 Use syzkaller syntax. Each syscall on its own line:
   r0 = socket$nl_route(0x10, 0x3, 0x0)
@@ -2253,21 +3054,27 @@ Use syzkaller syntax. Each syscall on its own line:
 Use $variant names (e.g. socket$inet_tcp, ioctl$KVM_RUN).
 Use different memory addresses for each argument (increment by 0x1000).
 
-Return ONLY JSON (no markdown):
-{{"classified_layers": {{"syscall_family": "...", "resource_chain": "...", "payload_grammar": "...", "subsystem_state": "...", "dispatch_selector": "..."}}, "blocking_layer": "...", "selected_strategy": "...", "programs": [{{"name": "short_name", "text": "complete program text"}}], "reasoning": "one sentence"}}"""
+{_json_only_contract(
+    '{"classified_layers": {"syscall_family": "...", "resource_chain": "...", "payload_grammar": "...", "subsystem_state": "...", "dispatch_selector": "..."}, "blocking_layer": "...", "selected_strategy": "...", "bug_hypothesis": "one sentence — which bug class and what specific trigger condition the programs probe", "programs": [{"name": "short_name", "text": "complete program text"}], "reasoning": "one sentence"}',
+    extra_rules=[
+        "Return 2-4 programs.",
+        "Each program text must be complete syzkaller syntax.",
+        "Each program should test a different angle of the same bug hypothesis (e.g. boundary lengths, malformed nesting, missing-state combos).",
+        "Do not include markdown fences or prose outside the JSON object.",
+    ],
+)}"""
 
     print(f"  [LLM-seed] Compact plan: {len(compact_plan)} chars")
     try:
-        text = _call_llm(prompt, timeout=120)
+        text = _call_llm(prompt, timeout=600)
         if not text:
             print("  [LLM-seed] No response from LLM")
             return None
-        start, end = text.find("{"), text.rfind("}") + 1
-        if start < 0 or end <= start:
-            print("  [LLM-seed] No JSON found in LLM response")
+        result = _extract_json(text)
+        if result is None:
+            print("  [LLM-seed] No valid JSON found in LLM response")
             return None
-        result = json.loads(text[start:end])
-    except json.JSONDecodeError as e:
+    except Exception as e:
         print(f"  [LLM-seed] JSON parse error: {e}")
         return None
 
@@ -2280,6 +3087,9 @@ Return ONLY JSON (no markdown):
     if classified_layers:
         print(f"  [LLM-seed] Classified layers: {classified_layers}")
 
+    bug_hypothesis = result.get("bug_hypothesis", "")
+    if bug_hypothesis:
+        print(f"  [LLM-seed] Bug hypothesis: {bug_hypothesis}")
     reasoning = result.get("reasoning", "")
     if reasoning:
         print(f"  [LLM-seed] Reasoning: {reasoning}")
@@ -2577,7 +3387,7 @@ Output ONLY the Python script. No markdown fences, no explanation."""
 
     print(f"  [codegen] Querying LLM for Python seed generator script...")
     print(f"  [codegen] Compact plan: {len(compact_plan)} chars (was ~12000+)")
-    script_text = _call_llm(prompt, timeout=120)
+    script_text = _call_llm(prompt, timeout=600)
     if not script_text:
         print("  [codegen] No response from LLM")
         return None

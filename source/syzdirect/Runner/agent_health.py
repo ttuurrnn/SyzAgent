@@ -38,18 +38,27 @@ def _load_detail_corpus(detail_corpus_path):
     return objs
 
 
-def _relevant_dist_from_corpus(detail_corpus_path, relevant_call_names, repeat_threshold=1):
+def _relevant_dist_from_corpus(detail_corpus_path, relevant_call_names,
+                                repeat_threshold=1, min_syscalls=3):
     """Compute the best distance among programs that mention target-related calls.
 
     repeat_threshold narrows the frontier for stateful targets by requiring
     the program to exercise relevant calls multiple times before we treat its
     distance as a meaningful target-progress signal.
+
+    min_syscalls: programs with fewer syscalls reporting Dist=0 are treated as
+    "trivial zero" (false zero from instrumentation never updating the counter)
+    rather than a real target reach. Returns the count of these for null-coverage
+    detection upstream.
+
+    Returns: (best_dist, matched_count, trivial_zero_count)
     """
     names = {name.lower() for name in (relevant_call_names or []) if name}
     if not names:
-        return None, 0
+        return None, 0, 0
     best = None
     matched = 0
+    trivial_zero_count = 0
     for item in _load_detail_corpus(detail_corpus_path):
         prog = str(item.get("Prog", "")).lower()
         if not prog:
@@ -63,9 +72,22 @@ def _relevant_dist_from_corpus(detail_corpus_path, relevant_call_names, repeat_t
         dist = item.get("Dist")
         # 4294967295 (UINT_MAX) is a sentinel meaning "no BB on target path
         # was hit" — treat it as missing, not as a real distance value.
-        if isinstance(dist, int) and dist != 4294967295 and (best is None or dist < best):
-            best = dist
-    return best, matched
+        if isinstance(dist, int) and dist != 4294967295:
+            # Trivial Dist=0: a program with too few syscalls cannot have actually
+            # exercised a stateful target. SyzDirect's instrumented kernel
+            # initialises the per-program distance counter to 0 and only updates
+            # it when an instrumented BB on the target path is hit. If no such
+            # BB is hit, the value stays at 0 — indistinguishable from a real
+            # "target reached" without this length filter.
+            # Count non-empty lines: each syscall is on its own line, but the
+            # program text typically ends with '\n' (and may have blank lines).
+            syscall_count = sum(1 for ln in prog.split("\n") if ln.strip())
+            if dist == 0 and syscall_count < min_syscalls:
+                trivial_zero_count += 1
+                continue
+            if best is None or dist < best:
+                best = dist
+    return best, matched, trivial_zero_count
 
 
 def assess_round_health(metrics_jsonl, manager_log, crash_summary=None,
@@ -155,28 +177,42 @@ def assess_round_health(metrics_jsonl, manager_log, crash_summary=None,
     dist_min_first = dist_vals[0] if dist_vals else None
     dist_min_last = dist_vals[-1] if dist_vals else None
     dist_min_best = min(dist_vals) if dist_vals else None
-    relevant_dist_min_best, relevant_prog_count = _relevant_dist_from_corpus(
-        detail_corpus_path, relevant_call_names, repeat_threshold=relevant_repeat_threshold,
-    )
+    relevant_dist_min_best, relevant_prog_count, trivial_zero_count = \
+        _relevant_dist_from_corpus(
+            detail_corpus_path, relevant_call_names,
+            repeat_threshold=relevant_repeat_threshold,
+        )
     effective_dist_best = relevant_dist_min_best if relevant_dist_min_best is not None else dist_min_best
 
     # ── Null-coverage detection ──────────────────────────────────────────
     # syz-manager initialises dist_min=0 and only updates it when a corpus
-    # program reaches a measured BB.  If all corpus programs have UINT_MAX
-    # distance (no BB on the target path was ever hit), dist_min stays at 0
-    # even after millions of executions — a "false zero" that makes the agent
-    # think the target was reached and suppresses stagnation detection.
+    # program reaches a measured BB.  Two failure modes produce a "false zero":
     #
-    # We detect this by cross-checking the detailCorpus: when
-    #   relevant_prog_count > 0  (target-relevant programs DO exist)
-    #   relevant_dist_min_best is None  (every one of them is UINT_MAX)
-    #   dist_min_best == 0              (metrics show the false zero)
-    # we override effective_dist_best with a large sentinel so that
-    # stagnation logic fires correctly.
+    # (A) UINT_MAX path: every relevant program reports UINT_MAX — no BB on
+    #     the target path was ever hit.  relevant_dist_min_best is None and
+    #     metrics still show dist_min=0.
+    #
+    # (B) Trivial-zero path (the common case in practice): the per-program
+    #     counter is initialised to 0 and reported as 0 even when no
+    #     instrumented BB was hit.  Programs of length 1-2 syscalls cannot
+    #     have actually exercised a stateful target, so when the bulk of
+    #     "relevant" zero-distance programs are trivially short, the 0 is
+    #     not a real target reach.
     null_coverage = (
         relevant_prog_count > 0
-        and relevant_dist_min_best is None
-        and dist_min_best == 0
+        and (
+            # (A) original UINT_MAX condition
+            (relevant_dist_min_best is None and dist_min_best == 0)
+            # (B-1) every matching program is a trivial zero
+            or (relevant_dist_min_best is None and trivial_zero_count > 0)
+            # (B-2) ≥50% of matching programs are trivial zeros AND no real
+            # positive distance was observed.  Threshold is permissive because
+            # real "deep" programs tend to be the minority once a target is
+            # genuinely reachable; if the majority of zeros come from short
+            # programs the metric cannot be trusted.
+            or (trivial_zero_count >= relevant_prog_count * 0.5
+                and (relevant_dist_min_best is None or relevant_dist_min_best == 0))
+        )
     )
     if null_coverage:
         # Use a large value — clearly not "target reached", but allows
@@ -221,8 +257,13 @@ def assess_round_health(metrics_jsonl, manager_log, crash_summary=None,
     elif dist_stagnant and exec_delta > 500:
         status = "stagnant"
         if null_coverage:
-            reason = (f"null coverage: {relevant_prog_count} relevant programs all have "
-                      f"UINT_MAX distance — no target BB reached (syz-manager false-zero)")
+            if trivial_zero_count > 0:
+                reason = (f"null coverage: {trivial_zero_count}/{relevant_prog_count} "
+                          f"relevant programs are trivial-zero (syz-manager false-zero "
+                          f"— counter never updated by an instrumented BB)")
+            else:
+                reason = (f"null coverage: {relevant_prog_count} relevant programs all have "
+                          f"UINT_MAX distance — no target BB reached (syz-manager false-zero)")
         else:
             basis = "relevant distance" if relevant_dist_min_best is not None else "distance"
             reason = f"{basis} stagnant at {effective_dist_best} (not getting closer to target)"
@@ -250,6 +291,7 @@ def assess_round_health(metrics_jsonl, manager_log, crash_summary=None,
         "dist_min_best": dist_min_best,
         "relevant_dist_min_best": relevant_dist_min_best,
         "relevant_prog_count": relevant_prog_count,
+        "trivial_zero_count": trivial_zero_count,
         "null_coverage": null_coverage,
         "effective_dist_min_best": effective_dist_best,
         "distance_basis": "relevant" if relevant_dist_min_best is not None else "raw",

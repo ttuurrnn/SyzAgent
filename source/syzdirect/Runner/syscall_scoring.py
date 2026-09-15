@@ -58,6 +58,14 @@ def subsystem_prep_syscalls(file_path, function_name=""):
     context = f"{file_path} {function_name}".lower()
     seeds = []
     mappings = [
+        (("net/core/filter", "net/core/sock_map", "net/core/skmsg",
+          "bpf_msg", "sockmap", "sock_map", "sk_msg"), [
+            "bpf$MAP_CREATE", "bpf$MAP_UPDATE_ELEM", "bpf$PROG_LOAD",
+            "bpf$BPF_PROG_ATTACH", "socket$inet_tcp", "socket$inet6_tcp",
+            "bind$inet", "connect$inet", "listen", "accept4$inet",
+            "sendmsg$inet", "sendto", "recvmsg", "socket$inet_udp",
+            "socket$inet6_udp", "close",
+        ]),
         (("drivers/net/netdevsim", "netdevsim", "nsim"), [
             "bpf$MAP_CREATE", "bpf$PROG_LOAD", "socket$nl_route",
             "sendmsg$nl_route", "socket$nl_generic",
@@ -76,8 +84,25 @@ def subsystem_prep_syscalls(file_path, function_name=""):
         (("net/packet", "packet"), [
             "socket$packet", "bind", "setsockopt$packet_fanout",
         ]),
+        (("crypto/algif_aead", "crypto/algif_skcipher", "crypto/af_alg",
+          "af_alg", "algif", "aead_recvmsg", "aead_sendmsg"), [
+            "socket$alg", "bind$alg", "setsockopt$ALG_SET_AEAD_AUTHSIZE",
+            "setsockopt$ALG_SET_KEY", "accept$alg", "accept4$alg",
+            "sendmsg$alg", "read$alg", "close",
+        ]),
         (("io_uring", "io_uring"), [
-            "io_uring_setup", "io_uring_register$IORING_REGISTER_FILES",
+            "syz_io_uring_setup", "syz_io_uring_submit",
+            "syz_io_uring_complete", "io_uring_setup", "io_uring_enter",
+            "io_uring_register$IORING_REGISTER_FILES",
+            "io_uring_register$IORING_REGISTER_BUFFERS",
+            "io_uring_register$IORING_REGISTER_EVENTFD",
+            "io_uring_register$IORING_REGISTER_PBUF_RING",
+            "io_uring_register$IORING_UNREGISTER_PBUF_RING",
+            "io_uring_register$IORING_REGISTER_PBUF_STATUS",
+            "eventfd2", "pipe2", "clock_gettime", "timerfd_create",
+            "epoll_create1", "epoll_ctl", "openat", "socketpair", "socket$inet_tcp",
+            "ioctl$sock_SIOCGIFINDEX",
+            "bind$inet", "connect$inet", "listen", "accept4$inet", "close",
         ]),
         (("gfs2", "fs/gfs2"), [
             "mount", "openat", "close",
@@ -111,12 +136,33 @@ def _score_syscall_name(name, context):
             score += 1
     if any(key in lowered for key in ("bpf", "xdp")) and "bpf" in context["path_tokens"] | context["func_tokens"]:
         score += 4
+    if any(token in context["file_path"].lower() or token in context["function"].lower()
+           for token in ("net/core/filter", "net/core/sock_map", "net/core/skmsg",
+                         "bpf_msg", "sockmap", "sock_map", "sk_msg")):
+        if lowered.startswith("bpf$"):
+            score += 8
+        if lowered in {"socket$inet_tcp", "bind$inet", "connect$inet",
+                       "listen", "accept4$inet", "sendmsg$inet", "sendto",
+                       "recvmsg", "socket$inet_udp", "socket$inet6_udp",
+                       "socket$inet6_tcp", "close"}:
+            score += 6
     if "netdevsim" in lowered and "netdevsim" in context["path_tokens"] | context["strong_tokens"]:
         score += 6
     if "vsock" in lowered and "vsock" in context["path_tokens"] | context["func_tokens"]:
         score += 4
     if "nl_route" in lowered and "net" in context["file_path"]:
         score += 1
+    if any(token in context["file_path"].lower() or token in context["function"].lower()
+           for token in ("crypto/algif_aead", "crypto/algif_skcipher", "crypto/af_alg",
+                         "af_alg", "algif", "aead_recvmsg", "aead_sendmsg")):
+        if lowered in {"socket$alg", "bind$alg", "accept$alg", "accept4$alg",
+                       "setsockopt$alg_set_aead_authsize", "setsockopt$alg_set_key",
+                       "sendmsg$alg", "read$alg", "close"}:
+            score += 8
+        if "recvmsg" in context["function"].lower() and lowered == "read$alg":
+            score += 12
+        if "sendmsg" in context["function"].lower() and lowered == "sendmsg$alg":
+            score += 12
     return score
 
 
@@ -140,6 +186,19 @@ def narrow_callfile_entries(entries, context_file="", target_function="", hunt_m
         "harvest": (4, 8),
     }
     max_targets, max_related = limits[hunt_mode]
+    sockmap_context = any(token in (f"{context_file} {target_function}".lower())
+                          for token in ("net/core/filter", "net/core/sock_map",
+                                        "net/core/skmsg", "bpf_msg", "sockmap",
+                                        "sock_map", "sk_msg"))
+    if sockmap_context:
+        max_targets = max(max_targets, 4)
+        max_related = max(max_related, 15)
+    afalg_context = any(token in (f"{context_file} {target_function}".lower())
+                        for token in ("crypto/algif_aead", "crypto/algif_skcipher",
+                                      "crypto/af_alg", "af_alg", "algif",
+                                      "aead_recvmsg", "aead_sendmsg"))
+    if afalg_context:
+        max_related = max(max_related, 8)
 
     scored = []
     for entry in entries:
@@ -182,12 +241,46 @@ def guess_syscalls(file_path):
     Names match syzkaller sys/linux/gen/amd64.go."""
     p = file_path.lower()
     patterns = [
+        ("net/core/filter", {"Target": "sendmsg$inet",
+                             "Relate": ["socket$inet_tcp", "bind$inet",
+                                        "connect$inet", "listen", "accept4$inet",
+                                        "bpf$MAP_CREATE", "bpf$MAP_UPDATE_ELEM",
+                                        "bpf$PROG_LOAD", "bpf$BPF_PROG_ATTACH",
+                                        "socket$inet_udp", "socket$inet6_udp",
+                                        "socket$inet6_tcp", "close"]}),
+        ("net/core/sock_map", {"Target": "bpf$MAP_UPDATE_ELEM",
+                               "Relate": ["bpf$MAP_CREATE", "bpf$PROG_LOAD",
+                                          "bpf$BPF_PROG_ATTACH", "socket$inet_tcp",
+                                          "socket$inet_udp", "socket$inet6_udp",
+                                          "socket$inet6_tcp", "sendmsg$inet",
+                                          "close"]}),
+        ("net/core/skmsg", {"Target": "sendmsg$inet",
+                            "Relate": ["socket$inet_tcp", "bind$inet",
+                                       "connect$inet", "listen", "accept4$inet",
+                                       "bpf$MAP_CREATE", "bpf$MAP_UPDATE_ELEM",
+                                       "bpf$PROG_LOAD", "bpf$BPF_PROG_ATTACH",
+                                       "socket$inet_udp", "socket$inet6_udp",
+                                       "socket$inet6_tcp", "close"]}),
         ("net/sched",     {"Target": "sendmsg$nl_route_sched",
                            "Relate": ["socket$nl_route", "sendmsg$nl_route", "bind", "close"]}),
         ("net/packet",    {"Target": "setsockopt$packet_fanout",
                            "Relate": ["socket$packet", "bind", "close"]}),
         ("net/vmw_vsock", {"Target": "connect$vsock_stream",
                            "Relate": ["socket$vsock_stream", "bind", "listen", "shutdown", "close"]}),
+        ("crypto/algif_aead", {"Target": "read$alg",
+                               "Relate": ["socket$alg", "bind$alg",
+                                          "setsockopt$ALG_SET_AEAD_AUTHSIZE",
+                                          "setsockopt$ALG_SET_KEY", "accept$alg",
+                                          "sendmsg$alg", "read$alg", "close"]}),
+        ("crypto/algif_skcipher", {"Target": "read$alg",
+                                   "Relate": ["socket$alg", "bind$alg",
+                                              "setsockopt$ALG_SET_KEY", "accept$alg",
+                                              "sendmsg$alg", "read$alg", "close"]}),
+        ("crypto/af_alg", {"Target": "sendmsg$alg",
+                           "Relate": ["socket$alg", "bind$alg",
+                                      "setsockopt$ALG_SET_AEAD_AUTHSIZE",
+                                      "setsockopt$ALG_SET_KEY", "accept$alg",
+                                      "sendmsg$alg", "read$alg", "close"]}),
         ("net/",          {"Target": "sendmsg",
                            "Relate": ["socket", "bind", "connect", "close"]}),
         ("drivers/media", {"Target": "ioctl",

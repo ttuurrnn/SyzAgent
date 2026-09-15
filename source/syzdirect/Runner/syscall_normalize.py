@@ -56,6 +56,7 @@ def normalize_syscall_name(name, context_file=""):
     suffix = name.split("$", 1)[1] if "$" in name else ""
 
     preferred_aliases = {
+        "bpf": "bpf$PROG_LOAD",
         "connect$vsock": "connect$vsock_stream",
         "bind$vsock": "bind$vsock_stream",
         "accept4$vsock": "accept4$vsock_stream",
@@ -84,6 +85,7 @@ def normalize_syscall_name(name, context_file=""):
         "bind": ["vsock_stream", "inet6", "inet"],
         "accept4": ["vsock_stream", "inet6", "inet"],
         "socket": ["vsock_stream", "inet_mptcp", "inet6_mptcp", "inet", "inet6"],
+        "bpf": ["PROG_LOAD", "MAP_CREATE", "MAP_UPDATE_ELEM", "BPF_PROG_ATTACH"],
         "io_uring_register": ["IORING_REGISTER_EVENTFD", "IORING_REGISTER_FILES"],
     }
     for suffix_hint in preferred_suffixes.get(base, []):

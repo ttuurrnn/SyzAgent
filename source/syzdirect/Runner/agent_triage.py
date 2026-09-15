@@ -34,7 +34,16 @@ def triage_failure(health, manager_log, crash_summary=None, hunt_mode="hybrid"):
     evidence = []
     secondary = []
     if crash_counts.get("target_related", 0) > 0:
-        return {"primary": "SUCCESS", "secondary": [], "evidence": ["target-related crash found"]}
+        if hunt_mode == "repro":
+            # Repro mode's whole goal is to land the crash — stop here.
+            return {"primary": "SUCCESS", "secondary": [],
+                    "evidence": ["target-related crash found"]}
+        # Hybrid/explore (0-day hunt): a target crash is the goal, but keep
+        # fuzzing the full round budget to accumulate more crashes / a
+        # reproducer rather than ending the campaign at round 1.
+        secondary.append("target_crash_found")
+        evidence.append("target-related crash found "
+                        "(continuing — using full round budget)")
     if hunt_mode != "repro" and crash_counts.get("incidental_unknown", 0) > 0:
         # Log incidental crashes but do NOT stop — keep fuzzing toward the target.
         secondary.append("incidental_crash_found")

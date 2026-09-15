@@ -32,6 +32,7 @@ class FailureClass(Enum):
     R1_MISSING_DEPS = "R1"      # Incomplete dependent syscall inference
     R2_PARAM_OBJECT = "R2"      # Difficult parameter/object generation
     R3_CONTEXT_DEPTH = "R3"     # Insufficient related syscall analysis
+    R4_DISTANCE_STALL = "R4"    # Coverage grows but distance stagnant
     SUCCESS = "SUCCESS"          # Target reached
     UNKNOWN = "UNKNOWN"          # Cannot classify
     MIXED = "MIXED"              # Multiple issues detected
@@ -60,29 +61,29 @@ class RunSummary:
     target_id: str
     total_iterations: int
     total_time_seconds: float
-    
+
     # Distance trends
     min_seed_distance: float
     avg_seed_distance: float
     distance_trend: List[float]  # Moving average over time
     plateau_detected: bool
     plateau_value: Optional[float]
-    
+
     # Template stats
     template_match_rate: float
     template_distances: Dict[str, float]
-    
+
     # Execution stats
     reached_target_count: int
     crash_count: int
-    
+
     # Error analysis
     errno_distribution: Dict[str, int]
     error_rate: float
     einval_rate: float
     eperm_rate: float
     efault_rate: float
-    
+
     # Object argument detection
     object_args_detected: bool
     fs_image_needed: bool
@@ -96,7 +97,7 @@ class TriageResult:
     confidence: float  # 0.0 to 1.0
     evidence: List[str]
     recommended_actions: List[str]
-    
+
     # Detailed diagnostics
     distance_analysis: Dict[str, Any]
     error_analysis: Dict[str, Any]
@@ -108,7 +109,7 @@ class FailureTriageAgent:
     Analyzes fuzzing run logs to classify failure reasons.
     Uses heuristics based on SyzDirect paper's failure analysis.
     """
-    
+
     # Error patterns indicating specific issues
     OBJECT_ARG_PATTERNS = [
         r'mount',
@@ -117,65 +118,66 @@ class FailureTriageAgent:
         r'loop',
         r'mkfs',
     ]
-    
+
     # Common errno values
     EINVAL = -22
     EPERM = -1
     EFAULT = -14
     ENOENT = -2
     EACCES = -13
-    
+
     def __init__(self, config: Dict = None):
         self.config = config or {}
-        
+
         # Thresholds for classification
         self.plateau_threshold = 0.05  # Distance change threshold for plateau
         self.plateau_window = 100      # Iterations to check for plateau
         self.error_rate_threshold = 0.7  # High error rate threshold
         self.einval_threshold = 0.5    # High EINVAL rate threshold
-        
-    def triage(self, logs: List[ExecutionLog], 
+
+    def triage(self, logs: List[ExecutionLog],
                static_info: Dict = None) -> TriageResult:
         """
         Perform failure triage on execution logs.
-        
+
         Args:
             logs: List of execution log entries
             static_info: Optional static analysis results
-            
+
         Returns:
             TriageResult with classification and recommendations
         """
         if not logs:
             return self._create_unknown_result("No logs provided")
-            
+
         # Compute summary statistics
         summary = self._compute_summary(logs)
-        
+
         # Check for success first
         if summary.reached_target_count > 0:
             return self._create_success_result(summary)
-            
+
         # Collect evidence for each failure class
         r1_evidence = self._check_r1(summary, logs, static_info)
         r2_evidence = self._check_r2(summary, logs)
         r3_evidence = self._check_r3(summary, logs, static_info)
-        
+        r4_evidence = self._check_r4(summary, logs)
+
         # Determine primary failure class
         failure_class, confidence = self._determine_class(
-            r1_evidence, r2_evidence, r3_evidence
+            r1_evidence, r2_evidence, r3_evidence, r4_evidence
         )
-        
+
         # Generate recommendations
         recommendations = self._generate_recommendations(
-            failure_class, r1_evidence, r2_evidence, r3_evidence
+            failure_class, r1_evidence, r2_evidence, r3_evidence, r4_evidence
         )
-        
+
         return TriageResult(
             target_id=summary.target_id,
             failure_class=failure_class,
             confidence=confidence,
-            evidence=r1_evidence + r2_evidence + r3_evidence,
+            evidence=r1_evidence + r2_evidence + r3_evidence + r4_evidence,
             recommended_actions=recommendations,
             distance_analysis={
                 'min_distance': summary.min_seed_distance,
@@ -194,15 +196,15 @@ class FailureTriageAgent:
                 'template_distances': summary.template_distances,
             },
         )
-    
+
     def _compute_summary(self, logs: List[ExecutionLog]) -> RunSummary:
         """Compute summary statistics from logs."""
         if not logs:
             raise ValueError("No logs to summarize")
-            
-        distances = [log.seed_distance for log in logs 
+
+        distances = [log.seed_distance for log in logs
                      if log.seed_distance < float('inf')]
-        
+
         # Compute distance trend (moving average)
         window_size = min(50, len(distances) // 10 + 1)
         distance_trend = []
@@ -210,7 +212,7 @@ class FailureTriageAgent:
             window = distances[i:i+window_size]
             if window:
                 distance_trend.append(statistics.mean(window))
-                
+
         # Detect plateau
         plateau_detected = False
         plateau_value = None
@@ -219,16 +221,16 @@ class FailureTriageAgent:
             if max(recent) - min(recent) < self.plateau_threshold:
                 plateau_detected = True
                 plateau_value = statistics.mean(recent)
-                
+
         # Aggregate errno counts
         total_errnos: Dict[str, int] = {}
         for log in logs:
             for errno, count in log.errno_counts.items():
                 total_errnos[errno] = total_errnos.get(errno, 0) + count
-                
+
         total_errors = sum(total_errnos.values())
         total_syscalls = len(logs) * 5  # Approximate
-        
+
         # Template statistics
         template_dists = {}
         for log in logs:
@@ -236,15 +238,15 @@ class FailureTriageAgent:
             if tid not in template_dists:
                 template_dists[tid] = []
             template_dists[tid].append(log.template_distance)
-            
+
         template_avg_dists = {
             tid: statistics.mean(dists) if dists else float('inf')
             for tid, dists in template_dists.items()
         }
-        
+
         # Count template matches (where template was actually used)
         template_matches = sum(1 for log in logs if log.template_id != 'none')
-        
+
         return RunSummary(
             target_id=logs[0].template_id.split('_')[0] if logs else 'unknown',
             total_iterations=len(logs),
@@ -266,25 +268,25 @@ class FailureTriageAgent:
             object_args_detected=False,  # Set by _check_r2
             fs_image_needed=False,  # Set by _check_r2
         )
-    
+
     def _check_r1(self, summary: RunSummary, logs: List[ExecutionLog],
                   static_info: Dict = None) -> List[str]:
         """
         Check for R1: Incomplete dependent syscall inference.
-        
+
         Indicators:
         - Template syscall sequence is short
         - Entry syscall executes but target never reached
         - Distance plateaus and doesn't improve across templates
         """
         evidence = []
-        
+
         # Check for distance plateau with no improvement
         if summary.plateau_detected:
             evidence.append(
                 f"R1: Distance plateau at {summary.plateau_value:.2f} detected"
             )
-            
+
         # Check if different templates show similar results (suggesting missing deps)
         if len(summary.template_distances) > 1:
             dists = list(summary.template_distances.values())
@@ -293,7 +295,7 @@ class FailureTriageAgent:
                 evidence.append(
                     "R1: Multiple templates show similar distances, suggesting common missing dependency"
                 )
-                
+
         # Check static info for short sequences
         if static_info:
             templates = template_list(static_info)
@@ -304,39 +306,39 @@ class FailureTriageAgent:
                         f"R1: Template {t.get('template_id')} has only {len(related)} related syscalls"
                     )
                     break
-                    
+
         return evidence
-    
-    def _check_r2(self, summary: RunSummary, 
+
+    def _check_r2(self, summary: RunSummary,
                   logs: List[ExecutionLog]) -> List[str]:
         """
         Check for R2: Difficult parameter/object generation.
-        
+
         Indicators:
         - Distance is very low (near target) but no trigger
         - High EINVAL/EFAULT rate on specific syscalls
         - Filesystem/image-related syscalls detected
         """
         evidence = []
-        
+
         # Check for near-target but no success
         if summary.min_seed_distance < 5 and summary.reached_target_count == 0:
             evidence.append(
                 f"R2: Very close to target (distance={summary.min_seed_distance:.2f}) but never reached"
             )
-            
+
         # Check for high EINVAL rate (wrong parameters)
         if summary.einval_rate > self.einval_threshold:
             evidence.append(
                 f"R2: High EINVAL rate ({summary.einval_rate:.1%}) suggests parameter issues"
             )
-            
+
         # Check for high EFAULT rate (memory/buffer issues)
         if summary.efault_rate > 0.3:
             evidence.append(
                 f"R2: High EFAULT rate ({summary.efault_rate:.1%}) suggests object/buffer issues"
             )
-            
+
         # Check for object argument patterns in errors
         for pattern in self.OBJECT_ARG_PATTERNS:
             for errno, count in summary.errno_distribution.items():
@@ -345,39 +347,39 @@ class FailureTriageAgent:
                         f"R2: Object argument pattern detected: {pattern}"
                     )
                     break
-                    
+
         return evidence
-    
+
     def _check_r3(self, summary: RunSummary, logs: List[ExecutionLog],
                   static_info: Dict = None) -> List[str]:
         """
         Check for R3: Insufficient related syscall context analysis.
-        
+
         Indicators:
         - Entry syscall is correct but related syscalls fail
         - High error rate on configuration syscalls (bind, setsockopt, etc.)
         - Seeds mostly fail on early-return paths
         """
         evidence = []
-        
+
         # Check overall error rate
         if summary.error_rate > self.error_rate_threshold:
             evidence.append(
                 f"R3: High overall error rate ({summary.error_rate:.1%}) suggests context setup issues"
             )
-            
+
         # Check for EPERM (permission/capability issues)
         if summary.eperm_rate > 0.2:
             evidence.append(
                 f"R3: High EPERM rate ({summary.eperm_rate:.1%}) suggests missing context setup"
             )
-            
+
         # Check template match rate (low rate suggests template not being used effectively)
         if summary.template_match_rate < 0.5:
             evidence.append(
                 f"R3: Low template match rate ({summary.template_match_rate:.1%}) suggests template not effective"
             )
-            
+
         # Check for decreasing but still failing distance
         if len(summary.distance_trend) >= 2:
             if summary.distance_trend[-1] > 0 and summary.distance_trend[-1] < summary.distance_trend[0]:
@@ -385,64 +387,94 @@ class FailureTriageAgent:
                     evidence.append(
                         "R3: Distance decreasing but not reaching target, related syscall context may be incomplete"
                     )
-                    
+
         return evidence
-    
-    def _determine_class(self, r1_evidence: List[str], 
+
+    def _check_r4(self, summary: RunSummary, logs: List[ExecutionLog]) -> List[str]:
+        """
+        Check for R4: Distance stagnant but coverage growing.
+        """
+        evidence = []
+
+        # R4 indicators:
+        # 1. Distance plateaued (min_seed_distance > 0)
+        # 2. Coverage is still growing (new coverage detected recently)
+
+        recent_logs = logs[-100:] if len(logs) > 100 else logs
+        coverage_growth = any(log.coverage_new for log in recent_logs)
+
+        if summary.plateau_detected and coverage_growth and summary.min_seed_distance > 0:
+            evidence.append(
+                f"R4: Distance stagnant at {summary.min_seed_distance:.2f} but coverage is still growing"
+            )
+
+        return evidence
+
+    def _determine_class(self, r1_evidence: List[str],
                          r2_evidence: List[str],
-                         r3_evidence: List[str]) -> Tuple[FailureClass, float]:
+                         r3_evidence: List[str],
+                         r4_evidence: List[str]) -> Tuple[FailureClass, float]:
         """Determine primary failure class based on evidence."""
         scores = {
             FailureClass.R1_MISSING_DEPS: len(r1_evidence),
             FailureClass.R2_PARAM_OBJECT: len(r2_evidence),
             FailureClass.R3_CONTEXT_DEPTH: len(r3_evidence),
+            FailureClass.R4_DISTANCE_STALL: len(r4_evidence),
         }
-        
+
         total = sum(scores.values())
         if total == 0:
             return FailureClass.UNKNOWN, 0.0
-            
+
         max_class = max(scores, key=scores.get)
         max_score = scores[max_class]
-        
+
         # Check for mixed case
         significant_classes = [c for c, s in scores.items() if s >= max_score * 0.7]
         if len(significant_classes) > 1:
             return FailureClass.MIXED, max_score / total
-            
+
         confidence = max_score / total
         return max_class, confidence
-    
+
     def _generate_recommendations(self, failure_class: FailureClass,
                                    r1_evidence: List[str],
                                    r2_evidence: List[str],
-                                   r3_evidence: List[str]) -> List[str]:
+                                   r3_evidence: List[str],
+                                   r4_evidence: List[str]) -> List[str]:
         """Generate actionable recommendations based on failure class."""
         recommendations = []
-        
+
         if failure_class in [FailureClass.R1_MISSING_DEPS, FailureClass.MIXED]:
             recommendations.extend([
                 "Expand related syscall candidates using resource flow analysis",
                 "Add more syscalls to create→configure→use sequence",
                 "Check for missing initialization syscalls",
             ])
-            
+
         if failure_class in [FailureClass.R2_PARAM_OBJECT, FailureClass.MIXED]:
             recommendations.extend([
                 "Add filesystem image corpus (ext4, btrfs, f2fs variants)",
                 "Constrain argument ranges based on EINVAL patterns",
                 "Pre-create required objects (files, devices) before entry syscall",
             ])
-            
+
         if failure_class in [FailureClass.R3_CONTEXT_DEPTH, FailureClass.MIXED]:
             recommendations.extend([
                 "Apply argument constraint refinement to related syscalls",
                 "Add context builder syscalls (socket→setsockopt→bind pattern)",
                 "Analyze error-inducing syscall parameters",
             ])
-            
+
+        if failure_class in [FailureClass.R4_DISTANCE_STALL, FailureClass.MIXED]:
+            recommendations.extend([
+                "Analyze roadmap stepping stones for missing state transitions",
+                "Identify blocking checks in target subsystem via LLM-guided analysis",
+                "Re-prioritize seeds that reached closest distance",
+            ])
+
         return recommendations
-    
+
     def _create_success_result(self, summary: RunSummary) -> TriageResult:
         """Create result for successful runs."""
         return TriageResult(
@@ -455,7 +487,7 @@ class FailureTriageAgent:
             error_analysis={'error_rate': summary.error_rate},
             template_analysis={'match_rate': summary.template_match_rate},
         )
-    
+
     def _create_unknown_result(self, reason: str) -> TriageResult:
         """Create result for unknown/unclassifiable cases."""
         return TriageResult(
@@ -474,7 +506,7 @@ def load_logs(log_file: str) -> List[ExecutionLog]:
     """Load execution logs from JSON file."""
     with open(log_file, 'r') as f:
         data = json.load(f)
-        
+
     logs = []
     for entry in data:
         log = ExecutionLog(
@@ -492,47 +524,101 @@ def load_logs(log_file: str) -> List[ExecutionLog]:
             iteration=entry.get('iteration', 0),
         )
         logs.append(log)
-        
-    return logs
+
+        return logs
 
 
-if __name__ == '__main__':
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='SyzDirect Failure Triage Agent')
-    parser.add_argument('--logs', required=True, help='Execution logs JSON')
-    parser.add_argument('--static-info', help='Static analysis results JSON')
-    parser.add_argument('--output', default='triage_result.json', help='Output file')
-    
-    args = parser.parse_args()
-    
-    # Load inputs
-    logs = load_logs(args.logs)
-    
-    static_info = None
-    if args.static_info:
-        with open(args.static_info, 'r') as f:
-            static_info = json.load(f)
-            
-    # Perform triage
-    agent = FailureTriageAgent()
-    result = agent.triage(logs, static_info)
-    
-    # Output result
-    result_dict = {
+def _extract_target_info(static_info: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Lift target metadata from static info into a stable, flat shape."""
+    if not isinstance(static_info, dict):
+        return {}
+
+    merged: Dict[str, Any] = {}
+    candidates = []
+    for key in ("target_info", "target_spec"):
+        value = static_info.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+    candidates.append(static_info)
+
+    for candidate in candidates:
+        for src, dst in (
+            ("target_id", "target_id"),
+            ("function", "function"),
+            ("file_path", "file_path"),
+            ("func_path", "func_path"),
+            ("kernel_commit", "kernel_commit"),
+            ("line", "line"),
+        ):
+            value = candidate.get(src)
+            if value not in (None, "") and dst not in merged:
+                merged[dst] = value
+
+    if "func_path" not in merged and merged.get("file_path"):
+        merged["func_path"] = merged["file_path"]
+    return merged
+
+
+def serialize_triage_result(result: TriageResult,
+                            static_info: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    """Convert a triage result into the JSON contract used by agents."""
+    payload = {
         'target_id': result.target_id,
         'failure_class': result.failure_class.value,
         'confidence': result.confidence,
         'evidence': result.evidence,
         'recommended_actions': result.recommended_actions,
-        'distance_analysis': result.distance_analysis,
+        'distance_analysis': dict(result.distance_analysis),
         'error_analysis': result.error_analysis,
         'template_analysis': result.template_analysis,
     }
-    
+
+    target_info = _extract_target_info(static_info)
+    if target_info:
+        payload["target_info"] = target_info
+
+    if isinstance(static_info, dict):
+        payload["static_info"] = static_info
+        roadmap = static_info.get("roadmap")
+        if not roadmap and isinstance(static_info.get("distance_analysis"), dict):
+            roadmap = static_info["distance_analysis"].get("roadmap")
+        if roadmap and "roadmap" not in payload["distance_analysis"]:
+            payload["distance_analysis"]["roadmap"] = roadmap
+        source_snippets = static_info.get("source_snippets")
+        if isinstance(source_snippets, str) and source_snippets.strip():
+            payload["source_snippets"] = source_snippets
+
+    return payload
+
+
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser(description='SyzDirect Failure Triage Agent')
+    parser.add_argument('--logs', required=True, help='Execution logs JSON')
+    parser.add_argument('--static-info', help='Static analysis results JSON')
+    parser.add_argument('--output', default='triage_result.json', help='Output file')
+
+    args = parser.parse_args()
+
+    # Load inputs
+    logs = load_logs(args.logs)
+
+    static_info = None
+    if args.static_info:
+        with open(args.static_info, 'r') as f:
+            static_info = json.load(f)
+
+    # Perform triage
+    agent = FailureTriageAgent()
+    result = agent.triage(logs, static_info)
+
+    # Output result
+    result_dict = serialize_triage_result(result, static_info)
+
     with open(args.output, 'w') as f:
         json.dump(result_dict, f, indent=2)
-        
+
     print(f"\n[+] Triage complete")
     print(f"    Failure class: {result.failure_class.value}")
     print(f"    Confidence: {result.confidence:.1%}")
