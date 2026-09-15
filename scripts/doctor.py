@@ -23,6 +23,8 @@ REQUIRED_COMMANDS = (
     "ssh-keygen",
 )
 
+OPTIONAL_LLM_COMMANDS = ("codex", "gemini", "ollama")
+
 
 def fmt(status: str, message: str) -> str:
     return f"[{status}] {message}"
@@ -58,6 +60,15 @@ def main() -> int:
         else:
             print(fmt("FAIL", f"{command}: missing"))
             missing.append(command)
+
+    available_llms = []
+    for command in OPTIONAL_LLM_COMMANDS:
+        path = shutil.which(command)
+        if path:
+            available_llms.append(command)
+            print(fmt("PASS", f"optional LLM backend {command}: {path}"))
+    if not available_llms:
+        print(fmt("WARN", "no optional LLM CLI found; rule-based fuzzing remains available"))
 
     if syzdirect_root.exists():
         print(fmt("PASS", f"SyzDirect checkout present: {syzdirect_root}"))

@@ -149,7 +149,7 @@ scripts/make_postmount_seeds.py
 
 1. `launch_postmount_probe.py`의 공통 실행 부분을
    `launch_target_probe.py`로 분리한다.
-2. `/home/user/...` 기본 경로를 저장소 상대 경로 또는 환경변수로 교체한다.
+2. 사용자 홈 디렉터리에 고정된 기본 경로를 저장소 상대 경로 또는 환경변수로 교체한다.
 3. filesystem 전용 seed 생성은 별도 profile/plugin으로 유지한다.
 4. network, BPF, io_uring 등은 각 subsystem별 seed profile을 추가하도록 한다.
 5. 새 target은 source code 수정 없이 target manifest로 선택할 수 있게 한다.
@@ -338,7 +338,7 @@ agent prompt/response 또는 round log
 - [ ] C++ analyzer 두 개가 깨끗한 build directory에서 빌드된다.
 - [ ] SyzDirect fork revision이 full SHA로 고정된다.
 - [ ] 문서가 언급하는 모든 스크립트가 실제 커밋에 포함된다.
-- [ ] 모든 `/home/user`, `/mnt/c`, 개인 디렉터리 기본값을 제거하거나 설정화한다.
+- [ ] 모든 개인 홈·호스트 마운트 기본경로를 제거하거나 설정화한다.
 - [ ] API key, token, password 및 private key가 Git history에 없다.
 - [ ] 대형 산출물과 별도 `.git` 디렉터리가 staging되지 않았다.
 - [ ] 최소 하나의 공개 가능한 sample target으로 end-to-end smoke test를 통과한다.
@@ -371,16 +371,21 @@ push하고, 상위 저장소 문서 및 setup에서 두 revision의 관계를 �
 
 ## 10. 현재 상태
 
-문서 작성 시점의 확인 결과:
+기능 분리 후 확인 결과:
 
 - 작업 브랜치: `feature/retargetable-cfgagent`
-- Python 테스트: 36개 통과
-- tracked 수정: 40개 파일
-- tracked diff: 약 2,733 insertions / 439 deletions
-- 해결 필요: `git diff --check`의 trailing whitespace 6건
-- 해결 필요: 실행용 스크립트의 `/home/user/...` 기본경로 설정화
-- 해결 필요: SyzDirect fork 및 고정 revision 구성
-- 해결 필요: 공통 코드와 CVE별/실험별 스크립트 분리
+- Python 테스트: 41개 통과
+- C++ analyzer: `interface_generator`, `target_analyzer` 빌드 통과
+- Commit 1, analyzer: `921d5c3`
+- Commit 2, agent core: `5dc5dbc`
+- Commit 3, runner: `1cfabdd`
+- Commit 4, retargetable filesystem probe: `981bb5e`
+- SyzDirect runtime branch: `feature/retargetable-cfgagent-runtime`
+- SyzDirect runtime head: `326a85f4703139ef8867586343f6f12c9e7f3bd3`
+- `git diff --check`, shell syntax 및 staged secret/path scan 통과
+- 개인 절대경로를 저장소 상대 경로와 환경변수 기반 설정으로 교체
+- CVE별 PoC, 제출 도구, 분석 산출물 및 비공개 target inventory 제외
 
-이 상태는 공개용 브랜치의 시작점이며, 아직 전체 변경을 한 번에 commit/push할 단계는
-아니다.
+아직 수행하지 않은 검증은 깨끗한 별도 clone에서의 end-to-end sample-target 실행이다.
+이는 실제 kernel/QEMU fuzzing 비용을 수반하므로 pull request 병합 전에 별도 smoke run으로
+수행하고, 그 실행 manifest와 full revision을 release artifact에 기록한다.

@@ -34,6 +34,11 @@ env/
 deps/
 
 # Generated experiment artifacts
+.analysis/
+artifacts/
+reports/
+seeds/
+patches/
 logs/
 runs/
 results/
@@ -46,6 +51,28 @@ case_*.xlsx
 *.qcow2
 bzImage
 vmlinux
+
+# Local analysis intermediates
+callee.txt
+caller.txt
+constraintsDebug
+kernel_signature_full
+kernel_signature_with_info_full
+patch.md
+source/syzdirect/Runner/output.json
+source/syzdirect/slimconfig*
+
+# Private or outcome-selected target inventories
+targets/kernel_configs/
+targets/zeroday*.json
+targets/*candidate*.json
+targets/refuzz*.json
+
+# Research journals and private evidence archives
+docs/CVE_STRATEGY.md
+docs/RUN_JOURNAL.md
+docs/SESSION_SUMMARY.md
+docs/Linux_Kernel_Bug_Research_Archive_2026/
 
 # LLVM source
 source/llvm-project-*/

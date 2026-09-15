@@ -61,6 +61,10 @@ Build the SyzDirect toolchain and fuzzer components:
 ./scripts/setup.sh --jobs 8
 ```
 
+The setup script checks out the tested SyzDirect runtime revision recorded in
+`configs/run_case.env.example`. Set `SYZDIRECT_REPO` and `SYZDIRECT_REF` to use
+another fork, but keep the full commit SHA in experiment manifests.
+
 Check the local environment:
 
 ```bash
@@ -108,6 +112,59 @@ Equivalent Make target:
 make run-case CASE=54 BUDGET_HOURS=1 MODE=agent-loop
 ```
 
+Batch-launch curated recent CVEs from `targets/recent_cves_2026.json`:
+
+```bash
+python3 scripts/run_recent_cves.py --group selected --limit 2
+python3 scripts/run_recent_cves.py --group shortlist --only-prebuilt --execute
+python3 scripts/run_recent_cves.py --group selected --run-tag codex-smoke --execute
+```
+
+The launcher now defaults to Codex CLI with `gpt-5.4` via
+`scripts/codex_cli.sh`. Override it per run if you want a different backend:
+
+```bash
+SYZDIRECT_LLM_BACKEND=gemini python3 scripts/run_recent_cves.py --group selected --limit 1
+SYZDIRECT_CODEX_MODEL=gpt-5.4 python3 scripts/run_recent_cves.py --group selected --limit 1
+```
+
+Summarize completed CVE runs under the runtime directory:
+
+```bash
+python3 scripts/summarize_cve_runs.py \
+  --runtime-root .runtime/cve \
+  --output .runtime/recent_cve_summary.json
+```
+
+Prepare an existing runtime for a Gemini-backed rerun:
+
+```bash
+python3 scripts/prepare_gemini_rerun.py \
+  --runtime-root .runtime/cve \
+  --cve CVE-2026-23277 CVE-2026-23231 \
+  --dry-run
+```
+
+For Gemini-backed headless runs, the launcher now prefers the workspace-local
+wrapper at `scripts/gemini_cli.sh`. It expects either:
+
+- `GEMINI_API_KEY`, or
+- `GOOGLE_API_KEY` with Vertex configuration
+
+An existing OAuth login under `~/.gemini/` may still prompt for browser
+interaction in non-interactive mode, so API-key auth is the safer automation
+path.
+
+You can probe the current shell before starting a long run:
+
+```bash
+python3 scripts/check_gemini_headless.py
+```
+
+`run_recent_cves.py` now forwards `COMMIT_OVERRIDE` automatically when the
+curated JSON contains `fix_commit`, so fresh runs do not need to re-resolve the
+CVE fix commit over the network.
+
 ## SyzDirect Runner
 
 The lower-level runner remains available for direct use:
@@ -130,6 +187,18 @@ python3 run_hunt.py fuzz \
   --targets 0 \
   --agent-rounds 5 \
   --agent-uptime 1
+```
+
+If you have a local clone of the official Linux kernel CVE repo, regenerate the
+recent-CVE shortlist file:
+
+```bash
+python3 scripts/build_recent_cve_targets.py \
+  --vulns-repo /path/to/linux-security-vulns \
+  --output targets/recent_cves_2026.json \
+  --as-of 2026-05-07 \
+  --selected-count 8 \
+  --shortlist-count 50
 ```
 
 ## Agent Loop

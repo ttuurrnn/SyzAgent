@@ -61,6 +61,7 @@ PACKAGES=(
     git
     golang-go
     libelf-dev
+    libboost-all-dev
     libncurses-dev
     libssl-dev
     make

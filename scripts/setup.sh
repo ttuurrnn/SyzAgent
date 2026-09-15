@@ -1,14 +1,14 @@
 #!/bin/bash
 # SyzDirect Environment Setup Script
-# Clone 후 이 스크립트를 실행하면 파이프라인 실행에 필요한 모든 빌드를 수행합니다.
+# Run this script after cloning to perform all necessary builds for the pipeline.
 #
 # Usage: ./scripts/setup.sh [--jobs N]
-#   --jobs N              : 병렬 빌드 수 (기본: 물리 코어의 절반, OOM 방지)
+#   --jobs N              : Number of parallel builds (default: half of physical cores to avoid OOM)
 #
-# 필요 조건:
+# Requirements:
 #   - Ubuntu 20.04+ / Debian 11+
-#   - 최소 32GB RAM (48GB+ 권장), 50GB+ 디스크
-#   - sudo 권한 (의존성 설치)
+#   - At least 32GB RAM (48GB+ recommended), 50GB+ disk
+#   - sudo privileges (for installing dependencies)
 
 set -euo pipefail
 
@@ -39,6 +39,7 @@ sudo apt-get install -y -qq \
     build-essential cmake ninja-build git \
     python3 python3-pip \
     golang-go \
+    libboost-all-dev \
     libelf-dev libssl-dev flex bison bc \
     qemu-system-x86 debootstrap \
     wget curl lld \
@@ -74,9 +75,13 @@ else
     if [ -f "$PATCH_FILE" ]; then
         log "Applying SyzDirect patches to LLVM..."
         cd "$LLVM_DIR"
-        patch -p0 --forward < "$PATCH_FILE" || {
-            log "Patches may already be applied, continuing..."
-        }
+        if patch -p1 --forward --dry-run < "$PATCH_FILE" >/dev/null 2>&1; then
+            patch -p1 --forward < "$PATCH_FILE"
+        elif patch -p1 --reverse --dry-run < "$PATCH_FILE" >/dev/null 2>&1; then
+            log "Patches already applied, continuing..."
+        else
+            err "Failed to apply LLVM patch: $PATCH_FILE"
+        fi
     else
         err "Patch file not found: $PATCH_FILE"
     fi
@@ -116,7 +121,7 @@ else
     mkdir -p build && cd build
     cmake ../src \
         -DLLVM_DIR="$LLVM_DIR/build/lib/cmake/llvm" \
-        -DCMAKE_CXX_FLAGS="-std=c++17" \
+        -DCMAKE_CXX_FLAGS="-std=c++17 -fno-rtti -fPIC" \
         2>&1 | tail -5
     make -j"$JOBS" 2>&1 | tail -10
     [ -f lib/interface_generator ] || err "interface_generator build failed"
@@ -137,7 +142,7 @@ else
     mkdir -p build && cd build
     cmake ../src \
         -DLLVM_DIR="$LLVM_DIR/build/lib/cmake/llvm" \
-        -DCMAKE_CXX_FLAGS="-std=c++17" \
+        -DCMAKE_CXX_FLAGS="-std=c++17 -fno-rtti -fPIC" \
         2>&1 | tail -5
     make -j"$JOBS" 2>&1 | tail -10
     [ -f lib/target_analyzer ] || err "target_analyzer build failed"
@@ -148,6 +153,28 @@ fi
 # Step 4: Build syzkaller fuzzer
 ########################################
 FUZZER_DIR="$SYZDIRECT_DIR/syzdirect_fuzzer"
+DEPS_SYZDIRECT_DIR="$PROJECT_ROOT/deps/SyzDirect"
+DEPS_FUZZER_DIR="$DEPS_SYZDIRECT_DIR/source/syzdirect/syzdirect_fuzzer"
+SYZDIRECT_REPO="${SYZDIRECT_REPO:-https://github.com/whysocscs/SyzDirect.git}"
+SYZDIRECT_REF="${SYZDIRECT_REF:-326a85f4703139ef8867586343f6f12c9e7f3bd3}"
+if [ ! -f "$FUZZER_DIR/Makefile" ]; then
+    mkdir -p "$PROJECT_ROOT/deps"
+    if [ ! -d "$DEPS_SYZDIRECT_DIR/.git" ]; then
+        rm -rf "$DEPS_SYZDIRECT_DIR"
+        git clone --depth 1 --filter=blob:none --sparse \
+            "$SYZDIRECT_REPO" \
+            "$DEPS_SYZDIRECT_DIR"
+    fi
+    if [ -n "$(git -C "$DEPS_SYZDIRECT_DIR" status --porcelain)" ]; then
+        err "SyzDirect dependency has local changes; refusing to change its revision"
+    fi
+    if [ "$(git -C "$DEPS_SYZDIRECT_DIR" rev-parse HEAD)" != "$SYZDIRECT_REF" ]; then
+        git -C "$DEPS_SYZDIRECT_DIR" fetch --depth 1 origin "$SYZDIRECT_REF"
+        git -C "$DEPS_SYZDIRECT_DIR" checkout --detach "$SYZDIRECT_REF"
+    fi
+    git -C "$DEPS_SYZDIRECT_DIR" sparse-checkout set --cone dataset source/syzdirect
+    FUZZER_DIR="$DEPS_FUZZER_DIR"
+fi
 SYZ_MANAGER="$FUZZER_DIR/bin/syz-manager"
 
 if [ -f "$SYZ_MANAGER" ]; then
@@ -156,7 +183,7 @@ else
     log "Step 4: Building syzkaller fuzzer..."
     cd "$FUZZER_DIR"
     if [ -f Makefile ]; then
-        make -j"$JOBS" 2>&1 | tail -10
+        make manager fuzzer execprog executor 2>&1 | tail -20
         [ -f bin/syz-manager ] || err "syzkaller build failed"
         log "syzkaller build complete."
     else

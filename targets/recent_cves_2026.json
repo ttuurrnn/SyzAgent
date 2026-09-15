@@ -1,0 +1,895 @@
+{
+  "_comment": "Recent (<=6 months from 2026-05-07) Linux kernel CVEs curated for SyzAgent directed fuzzing. Generated from a local linux/security/vulns.git clone.",
+  "_source": "linux/security/vulns.git local clone, filtered 2025-11-07..2026-05-07",
+  "_candidate_count": 1884,
+  "_shortlist_count": 50,
+  "_selection_policy": {
+    "selected_count": 8,
+    "shortlist_count": 50,
+    "max_per_file": 2,
+    "max_per_prebuilt": 8
+  },
+  "selected": [
+    {
+      "cve": "CVE-2026-31665",
+      "date": "2026-04-24",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/netfilter/nft_ct.c",
+      "function": "nf_ct_timeout_data",
+      "fix_commit": "f8dca15a1b190787bbd03285304b569631160eda",
+      "checkout_commit": "f8dca15a1b190787bbd03285304b569631160eda~1",
+      "subject": "netfilter: nft_ct: fix use-after-free in timeout object destroy",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-31504",
+      "date": "2026-04-22",
+      "kind": [
+        "UAF",
+        "RACE"
+      ],
+      "file": "net/packet/af_packet.c",
+      "function": "packet_release",
+      "fix_commit": "42156f93d123436f2a27c468f18c966b7e5db796",
+      "checkout_commit": "42156f93d123436f2a27c468f18c966b7e5db796~1",
+      "subject": "net: fix fanout UAF in packet_release() via NETDEV_UP race",
+      "prebuilt_idx": 10,
+      "callfile_template": "sendto$packet",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[10]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23458",
+      "date": "2026-04-03",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/netfilter/nf_conntrack_netlink.c",
+      "function": "ctnetlink_dump_exp_ct",
+      "fix_commit": "5cb81eeda909dbb2def209dd10636b51549a3f8a",
+      "checkout_commit": "5cb81eeda909dbb2def209dd10636b51549a3f8a~1",
+      "subject": "netfilter: ctnetlink: fix use-after-free in ctnetlink_dump_exp_ct()",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23231",
+      "date": "2026-03-04",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/netfilter/nf_tables_api.c",
+      "function": "nf_tables_addchain",
+      "fix_commit": "71e99ee20fc3f662555118cf1159443250647533",
+      "checkout_commit": "71e99ee20fc3f662555118cf1159443250647533~1",
+      "subject": "netfilter: nf_tables: fix use-after-free in nf_tables_addchain()",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23111",
+      "date": "2026-02-13",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/netfilter/nf_tables_api.c",
+      "function": "nft_map_catchall_activate",
+      "fix_commit": "f41c5d151078c5348271ffaf8e7410d96f2d82f8",
+      "checkout_commit": "f41c5d151078c5348271ffaf8e7410d96f2d82f8~1",
+      "subject": "netfilter: nf_tables: fix inverted genmask check in nft_map_catchall_activate()",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-22999",
+      "date": "2026-01-25",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/sched/sch_qfq.c",
+      "function": "qfq_change_class",
+      "fix_commit": "3879cffd9d07aa0377c4b8835c4f64b4fb24ac78",
+      "checkout_commit": "3879cffd9d07aa0377c4b8835c4f64b4fb24ac78~1",
+      "subject": "net/sched: sch_qfq: do not free existing class in qfq_change_class()",
+      "prebuilt_idx": 0,
+      "callfile_template": "sendmsg$nl_route_sched",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[0]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-71066",
+      "date": "2026-01-13",
+      "kind": [
+        "UAF",
+        "RACE"
+      ],
+      "file": "net/sched/sch_ets.c",
+      "function": "ets_qdisc_dequeue",
+      "fix_commit": "ce052b9402e461a9aded599f5b47e76bc727f7de",
+      "checkout_commit": "ce052b9402e461a9aded599f5b47e76bc727f7de~1",
+      "subject": "net/sched: ets: Always remove class from active list before deleting in ets_qdisc_change",
+      "prebuilt_idx": 0,
+      "callfile_template": "sendmsg$nl_route_sched",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[0]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-68188",
+      "date": "2025-12-16",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/ipv4/tcp_fastopen.c",
+      "function": "tcp_fastopen_active_disable_ofo_check",
+      "fix_commit": "b62a59c18b692f892dcb8109c1c2e653b2abc95c",
+      "checkout_commit": "b62a59c18b692f892dcb8109c1c2e653b2abc95c~1",
+      "subject": "tcp: use dst_dev_rcu() in tcp_fastopen_active_disable_ofo_check()",
+      "prebuilt_idx": 3,
+      "callfile_template": "setsockopt$inet_tcp_TCP_CONGESTION",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[3]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    }
+  ],
+  "shortlist": [
+    {
+      "cve": "CVE-2026-31665",
+      "date": "2026-04-24",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/netfilter/nft_ct.c",
+      "function": "nf_ct_timeout_data",
+      "fix_commit": "f8dca15a1b190787bbd03285304b569631160eda",
+      "checkout_commit": "f8dca15a1b190787bbd03285304b569631160eda~1",
+      "subject": "netfilter: nft_ct: fix use-after-free in timeout object destroy",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-31504",
+      "date": "2026-04-22",
+      "kind": [
+        "UAF",
+        "RACE"
+      ],
+      "file": "net/packet/af_packet.c",
+      "function": "packet_release",
+      "fix_commit": "42156f93d123436f2a27c468f18c966b7e5db796",
+      "checkout_commit": "42156f93d123436f2a27c468f18c966b7e5db796~1",
+      "subject": "net: fix fanout UAF in packet_release() via NETDEV_UP race",
+      "prebuilt_idx": 10,
+      "callfile_template": "sendto$packet",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[10]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23458",
+      "date": "2026-04-03",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/netfilter/nf_conntrack_netlink.c",
+      "function": "ctnetlink_dump_exp_ct",
+      "fix_commit": "5cb81eeda909dbb2def209dd10636b51549a3f8a",
+      "checkout_commit": "5cb81eeda909dbb2def209dd10636b51549a3f8a~1",
+      "subject": "netfilter: ctnetlink: fix use-after-free in ctnetlink_dump_exp_ct()",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23231",
+      "date": "2026-03-04",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/netfilter/nf_tables_api.c",
+      "function": "nf_tables_addchain",
+      "fix_commit": "71e99ee20fc3f662555118cf1159443250647533",
+      "checkout_commit": "71e99ee20fc3f662555118cf1159443250647533~1",
+      "subject": "netfilter: nf_tables: fix use-after-free in nf_tables_addchain()",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23111",
+      "date": "2026-02-13",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/netfilter/nf_tables_api.c",
+      "function": "nft_map_catchall_activate",
+      "fix_commit": "f41c5d151078c5348271ffaf8e7410d96f2d82f8",
+      "checkout_commit": "f41c5d151078c5348271ffaf8e7410d96f2d82f8~1",
+      "subject": "netfilter: nf_tables: fix inverted genmask check in nft_map_catchall_activate()",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-22999",
+      "date": "2026-01-25",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/sched/sch_qfq.c",
+      "function": "qfq_change_class",
+      "fix_commit": "3879cffd9d07aa0377c4b8835c4f64b4fb24ac78",
+      "checkout_commit": "3879cffd9d07aa0377c4b8835c4f64b4fb24ac78~1",
+      "subject": "net/sched: sch_qfq: do not free existing class in qfq_change_class()",
+      "prebuilt_idx": 0,
+      "callfile_template": "sendmsg$nl_route_sched",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[0]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-71066",
+      "date": "2026-01-13",
+      "kind": [
+        "UAF",
+        "RACE"
+      ],
+      "file": "net/sched/sch_ets.c",
+      "function": "ets_qdisc_dequeue",
+      "fix_commit": "ce052b9402e461a9aded599f5b47e76bc727f7de",
+      "checkout_commit": "ce052b9402e461a9aded599f5b47e76bc727f7de~1",
+      "subject": "net/sched: ets: Always remove class from active list before deleting in ets_qdisc_change",
+      "prebuilt_idx": 0,
+      "callfile_template": "sendmsg$nl_route_sched",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[0]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-68188",
+      "date": "2025-12-16",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/ipv4/tcp_fastopen.c",
+      "function": "tcp_fastopen_active_disable_ofo_check",
+      "fix_commit": "b62a59c18b692f892dcb8109c1c2e653b2abc95c",
+      "checkout_commit": "b62a59c18b692f892dcb8109c1c2e653b2abc95c~1",
+      "subject": "tcp: use dst_dev_rcu() in tcp_fastopen_active_disable_ofo_check()",
+      "prebuilt_idx": 3,
+      "callfile_template": "setsockopt$inet_tcp_TCP_CONGESTION",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[3]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-40186",
+      "date": "2025-11-12",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/ipv4/tcp_input.c",
+      "function": "tcp_conn_request",
+      "fix_commit": "2e7cbbbe3d61c63606994b7ff73c72537afe2e1c",
+      "checkout_commit": "2e7cbbbe3d61c63606994b7ff73c72537afe2e1c~1",
+      "subject": "tcp: Don't call reqsk_fastopen_remove() in tcp_conn_request().",
+      "prebuilt_idx": 3,
+      "callfile_template": "setsockopt$inet_tcp_TCP_CONGESTION",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[3]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-43233",
+      "date": "2026-05-06",
+      "kind": [
+        "OOB"
+      ],
+      "file": "net/netfilter/nf_conntrack_h323_asn1.c",
+      "function": "decode_choice",
+      "fix_commit": "baed0d9ba91d4f390da12d5039128ee897253d60",
+      "checkout_commit": "baed0d9ba91d4f390da12d5039128ee897253d60~1",
+      "subject": "netfilter: nf_conntrack_h323: fix OOB read in decode_choice()",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23455",
+      "date": "2026-04-03",
+      "kind": [
+        "OOB"
+      ],
+      "file": "net/netfilter/nf_conntrack_h323_asn1.c",
+      "function": "DecodeQ931",
+      "fix_commit": "f173d0f4c0f689173f8cdac79991043a4a89bf66",
+      "checkout_commit": "f173d0f4c0f689173f8cdac79991043a4a89bf66~1",
+      "subject": "netfilter: nf_conntrack_h323: check for zero length in DecodeQ931()",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-31700",
+      "date": "2026-05-01",
+      "kind": [
+        "RACE"
+      ],
+      "file": "net/packet/af_packet.c",
+      "function": "tpacket_snd",
+      "fix_commit": "2c054e17d9d41f1020376806c7f750834ced4dc5",
+      "checkout_commit": "2c054e17d9d41f1020376806c7f750834ced4dc5~1",
+      "subject": "net/packet: fix TOCTOU race on mmap'd vnet_hdr in tpacket_snd()",
+      "prebuilt_idx": 10,
+      "callfile_template": "sendto$packet",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[10]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-31406",
+      "date": "2026-04-06",
+      "kind": [
+        "RACE"
+      ],
+      "file": "net/xfrm/xfrm_nat_keepalive.c",
+      "function": "xfrm_nat_keepalive_net_fini",
+      "fix_commit": "daf8e3b253aa760ff9e96c7768a464bc1d6b3c90",
+      "checkout_commit": "daf8e3b253aa760ff9e96c7768a464bc1d6b3c90~1",
+      "subject": "xfrm: Fix work re-schedule after cancel in xfrm_nat_keepalive_net_fini()",
+      "prebuilt_idx": 9,
+      "callfile_template": "sendmsg$nl_xfrm",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[9]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23239",
+      "date": "2026-03-10",
+      "kind": [
+        "RACE"
+      ],
+      "file": "net/xfrm/espintcp.c",
+      "function": "espintcp_close",
+      "fix_commit": "e1512c1db9e8794d8d130addd2615ec27231d994",
+      "checkout_commit": "e1512c1db9e8794d8d130addd2615ec27231d994~1",
+      "subject": "espintcp: Fix race condition in espintcp_close()",
+      "prebuilt_idx": 9,
+      "callfile_template": "sendmsg$nl_xfrm",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[9]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-40231",
+      "date": "2025-12-04",
+      "kind": [
+        "RACE"
+      ],
+      "file": "net/vmw_vsock/af_vsock.c",
+      "function": "vsock_assign_transport",
+      "fix_commit": "f7c877e7535260cc7a21484c994e8ce7e8cb6780",
+      "checkout_commit": "f7c877e7535260cc7a21484c994e8ce7e8cb6780~1",
+      "subject": "vsock: fix lock inversion in vsock_assign_transport()",
+      "prebuilt_idx": 4,
+      "callfile_template": "connect$vsock_stream",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[4]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-43084",
+      "date": "2026-05-06",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/netfilter/nfnetlink_queue.c",
+      "function": "",
+      "fix_commit": "936206e3f6ff411581e615e930263d6f8b78df9d",
+      "checkout_commit": "936206e3f6ff411581e615e930263d6f8b78df9d~1",
+      "subject": "netfilter: nfnetlink_queue: make hash table per queue",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-43027",
+      "date": "2026-05-01",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/netfilter/nf_conntrack_helper.c",
+      "function": "",
+      "fix_commit": "a242a9ae58aa46ff7dae51ce64150a93957abe65",
+      "checkout_commit": "a242a9ae58aa46ff7dae51ce64150a93957abe65~1",
+      "subject": "netfilter: nf_conntrack_helper: pass helper to expect cleanup",
+      "prebuilt_idx": 7,
+      "callfile_template": "sendmsg$nl_netfilter",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[7]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23413",
+      "date": "2026-04-02",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/sched/sch_ingress.c",
+      "function": "",
+      "fix_commit": "a0671125d4f55e1e98d9bde8a0b671941987e208",
+      "checkout_commit": "a0671125d4f55e1e98d9bde8a0b671941987e208~1",
+      "subject": "clsact: Fix use-after-free in init/destroy rollback asymmetry",
+      "prebuilt_idx": 0,
+      "callfile_template": "sendmsg$nl_route_sched",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[0]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23294",
+      "date": "2026-03-25",
+      "kind": [
+        "UAF",
+        "RACE"
+      ],
+      "file": "kernel/bpf/devmap.c",
+      "function": "bq_enqueue",
+      "fix_commit": "1872e75375c40add4a35990de3be77b5741c252c",
+      "checkout_commit": "1872e75375c40add4a35990de3be77b5741c252c~1",
+      "subject": "bpf: Fix race in devmap on PREEMPT_RT",
+      "prebuilt_idx": 5,
+      "callfile_template": "bpf$PROG_LOAD",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[5]. BPF verifier path is directly reachable from bpf syscalls. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23270",
+      "date": "2026-03-18",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/sched/act_ct.c",
+      "function": "",
+      "fix_commit": "11cb63b0d1a0685e0831ae3c77223e002ef18189",
+      "checkout_commit": "11cb63b0d1a0685e0831ae3c77223e002ef18189~1",
+      "subject": "net/sched: Only allow act_ct to bind to clsact/ingress qdiscs and shared blocks",
+      "prebuilt_idx": 0,
+      "callfile_template": "sendmsg$nl_route_sched",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[0]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23074",
+      "date": "2026-02-04",
+      "kind": [
+        "UAF"
+      ],
+      "file": "net/sched/sch_teql.c",
+      "function": "",
+      "fix_commit": "50da4b9d07a7a463e2cfb738f3ad4cff6b2c9c3b",
+      "checkout_commit": "50da4b9d07a7a463e2cfb738f3ad4cff6b2c9c3b~1",
+      "subject": "net/sched: Enforce that teql can only be used as root qdisc",
+      "prebuilt_idx": 0,
+      "callfile_template": "sendmsg$nl_route_sched",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[0]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-40248",
+      "date": "2025-12-04",
+      "kind": [
+        "UAF",
+        "RACE",
+        "NPD"
+      ],
+      "file": "net/vmw_vsock/af_vsock.c",
+      "function": "",
+      "fix_commit": "002541ef650b742a198e4be363881439bb9d86b4",
+      "checkout_commit": "002541ef650b742a198e4be363881439bb9d86b4~1",
+      "subject": "vsock: Ignore signal/timeout on connect() if already established",
+      "prebuilt_idx": 4,
+      "callfile_template": "connect$vsock_stream",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[4]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-43099",
+      "date": "2026-05-06",
+      "kind": [
+        "NPD"
+      ],
+      "file": "net/ipv4/icmp.c",
+      "function": "icmp_build_probe",
+      "fix_commit": "fde29fd9349327acc50d19a0b5f3d5a6c964dfd8",
+      "checkout_commit": "fde29fd9349327acc50d19a0b5f3d5a6c964dfd8~1",
+      "subject": "ipv4: icmp: fix null-ptr-deref in icmp_build_probe()",
+      "prebuilt_idx": 3,
+      "callfile_template": "setsockopt$inet_tcp_TCP_CONGESTION",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[3]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-43164",
+      "date": "2026-05-06",
+      "kind": [
+        "NPD"
+      ],
+      "file": "net/ipv4/udplite.c",
+      "function": "__udp_enqueue_schedule_skb",
+      "fix_commit": "470c7ca2b4c3e3a51feeb952b7f97a775b5c49cd",
+      "checkout_commit": "470c7ca2b4c3e3a51feeb952b7f97a775b5c49cd~1",
+      "subject": "udplite: Fix null-ptr-deref in __udp_enqueue_schedule_skb().",
+      "prebuilt_idx": 3,
+      "callfile_template": "setsockopt$inet_tcp_TCP_CONGESTION",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[3]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-31421",
+      "date": "2026-04-13",
+      "kind": [
+        "NPD"
+      ],
+      "file": "net/sched/cls_fw.c",
+      "function": "fw_classify",
+      "fix_commit": "faeea8bbf6e958bf3c00cb08263109661975987c",
+      "checkout_commit": "faeea8bbf6e958bf3c00cb08263109661975987c~1",
+      "subject": "net/sched: cls_fw: fix NULL pointer dereference on shared blocks",
+      "prebuilt_idx": 0,
+      "callfile_template": "sendmsg$nl_route_sched",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[0]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23398",
+      "date": "2026-03-26",
+      "kind": [
+        "NPD"
+      ],
+      "file": "net/ipv4/icmp.c",
+      "function": "icmp_tag_validation",
+      "fix_commit": "614aefe56af8e13331e50220c936fc0689cf5675",
+      "checkout_commit": "614aefe56af8e13331e50220c936fc0689cf5675~1",
+      "subject": "icmp: fix NULL pointer dereference in icmp_tag_validation()",
+      "prebuilt_idx": 3,
+      "callfile_template": "setsockopt$inet_tcp_TCP_CONGESTION",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[3]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23125",
+      "date": "2026-02-14",
+      "kind": [
+        "NPD"
+      ],
+      "file": "net/sctp/sm_statefuns.c",
+      "function": "sctp_outq_flush_data",
+      "fix_commit": "a80c9d945aef55b23b54838334345f20251dad83",
+      "checkout_commit": "a80c9d945aef55b23b54838334345f20251dad83~1",
+      "subject": "sctp: move SCTP_CMD_ASSOC_SHKEY right after SCTP_CMD_PEER_INIT",
+      "prebuilt_idx": 8,
+      "callfile_template": "connect$inet_sctp",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[8]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-43070",
+      "date": "2026-05-05",
+      "kind": [
+        "OOB"
+      ],
+      "file": "kernel/bpf/verifier.c",
+      "function": "__mark_reg_known",
+      "fix_commit": "a3125bc01884431d30d731461634c8295b6f0529",
+      "checkout_commit": "a3125bc01884431d30d731461634c8295b6f0529~1",
+      "subject": "bpf: Reset register ID for BPF_END value tracking",
+      "prebuilt_idx": 5,
+      "callfile_template": "bpf$PROG_LOAD",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[5]. BPF verifier path is directly reachable from bpf syscalls. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-31675",
+      "date": "2026-04-25",
+      "kind": [
+        "OOB"
+      ],
+      "file": "net/sched/sch_netem.c",
+      "function": "",
+      "fix_commit": "d64cb81dcbd54927515a7f65e5e24affdc73c14b",
+      "checkout_commit": "d64cb81dcbd54927515a7f65e5e24affdc73c14b~1",
+      "subject": "net/sched: sch_netem: fix out-of-bounds access in packet corruption",
+      "prebuilt_idx": 0,
+      "callfile_template": "sendmsg$nl_route_sched",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[0]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-31413",
+      "date": "2026-04-12",
+      "kind": [
+        "OOB"
+      ],
+      "file": "kernel/bpf/verifier.c",
+      "function": "maybe_fork_scalars",
+      "fix_commit": "c845894ebd6fb43226b3118d6b017942550910c5",
+      "checkout_commit": "c845894ebd6fb43226b3118d6b017942550910c5~1",
+      "subject": "bpf: Fix unsound scalar forking in maybe_fork_scalars() for BPF_OR",
+      "prebuilt_idx": 5,
+      "callfile_template": "bpf$PROG_LOAD",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[5]. BPF verifier path is directly reachable from bpf syscalls. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23378",
+      "date": "2026-03-25",
+      "kind": [
+        "OOB"
+      ],
+      "file": "net/sched/act_ife.c",
+      "function": "",
+      "fix_commit": "e2cedd400c3ec0302ffca2490e8751772906ac23",
+      "checkout_commit": "e2cedd400c3ec0302ffca2490e8751772906ac23~1",
+      "subject": "net/sched: act_ife: Fix metalist update behavior",
+      "prebuilt_idx": 0,
+      "callfile_template": "sendmsg$nl_route_sched",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[0]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-71128",
+      "date": "2026-01-14",
+      "kind": [
+        "OOB"
+      ],
+      "file": "net/ipv4/ip_gre.c",
+      "function": "",
+      "fix_commit": "35ddf66c65eff93fff91406756ba273600bf61a3",
+      "checkout_commit": "35ddf66c65eff93fff91406756ba273600bf61a3~1",
+      "subject": "erspan: Initialize options_len before referencing options.",
+      "prebuilt_idx": 3,
+      "callfile_template": "setsockopt$inet_tcp_TCP_CONGESTION",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[3]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-68378",
+      "date": "2025-12-24",
+      "kind": [
+        "OOB"
+      ],
+      "file": "kernel/bpf/stackmap.c",
+      "function": "__bpf_get_stackid",
+      "fix_commit": "23f852daa4bab4d579110e034e4d513f7d490846",
+      "checkout_commit": "23f852daa4bab4d579110e034e4d513f7d490846~1",
+      "subject": "bpf: Fix stackmap overflow check in __bpf_get_stackid()",
+      "prebuilt_idx": 5,
+      "callfile_template": "bpf$PROG_LOAD",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[5]. BPF verifier path is directly reachable from bpf syscalls. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-40331",
+      "date": "2025-12-09",
+      "kind": [
+        "OOB",
+        "RACE"
+      ],
+      "file": "net/sctp/diag.c",
+      "function": "",
+      "fix_commit": "95aef86ab231f047bb8085c70666059b58f53c09",
+      "checkout_commit": "95aef86ab231f047bb8085c70666059b58f53c09~1",
+      "subject": "sctp: Prevent TOCTOU out-of-bounds write",
+      "prebuilt_idx": 8,
+      "callfile_template": "connect$inet_sctp",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[8]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-40281",
+      "date": "2025-12-07",
+      "kind": [
+        "OOB"
+      ],
+      "file": "net/sctp/transport.c",
+      "function": "",
+      "fix_commit": "1534ff77757e44bcc4b98d0196bc5c0052fce5fa",
+      "checkout_commit": "1534ff77757e44bcc4b98d0196bc5c0052fce5fa~1",
+      "subject": "sctp: prevent possible shift-out-of-bounds in sctp_transport_update_rto",
+      "prebuilt_idx": 8,
+      "callfile_template": "connect$inet_sctp",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[8]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-31663",
+      "date": "2026-04-24",
+      "kind": [
+        "RACE"
+      ],
+      "file": "net/xfrm/xfrm_input.c",
+      "function": "",
+      "fix_commit": "1c428b03840094410c5fb6a5db30640486bbbfcb",
+      "checkout_commit": "1c428b03840094410c5fb6a5db30640486bbbfcb~1",
+      "subject": "xfrm: hold dev ref until after transport_finish NF_HOOK",
+      "prebuilt_idx": 9,
+      "callfile_template": "sendmsg$nl_xfrm",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[9]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23342",
+      "date": "2026-03-25",
+      "kind": [
+        "RACE"
+      ],
+      "file": "kernel/bpf/cpumap.c",
+      "function": "bq_enqueue",
+      "fix_commit": "869c63d5975d55e97f6b168e885452b3da20ea47",
+      "checkout_commit": "869c63d5975d55e97f6b168e885452b3da20ea47~1",
+      "subject": "bpf: Fix race in cpumap on PREEMPT_RT",
+      "prebuilt_idx": 5,
+      "callfile_template": "bpf$PROG_LOAD",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[5]. BPF verifier path is directly reachable from bpf syscalls. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-68241",
+      "date": "2025-12-16",
+      "kind": [
+        "RACE",
+        "LEAK"
+      ],
+      "file": "net/ipv4/route.c",
+      "function": "",
+      "fix_commit": "ac1499fcd40fe06479e9b933347b837ccabc2a40",
+      "checkout_commit": "ac1499fcd40fe06479e9b933347b837ccabc2a40~1",
+      "subject": "ipv4: route: Prevent rt_bind_exception() from rebinding stale fnhe",
+      "prebuilt_idx": 3,
+      "callfile_template": "setsockopt$inet_tcp_TCP_CONGESTION",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[3]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-40319",
+      "date": "2025-12-08",
+      "kind": [
+        "RACE"
+      ],
+      "file": "kernel/bpf/ringbuf.c",
+      "function": "bpf_ringbuf_commit",
+      "fix_commit": "4e9077638301816a7d73fa1e1b4c1db4a7e3b59c",
+      "checkout_commit": "4e9077638301816a7d73fa1e1b4c1db4a7e3b59c~1",
+      "subject": "bpf: Sync pending IRQ work before freeing ring buffer",
+      "prebuilt_idx": 5,
+      "callfile_template": "bpf$PROG_LOAD",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[5]. BPF verifier path is directly reachable from bpf syscalls. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-23319",
+      "date": "2026-03-25",
+      "kind": [
+        "UAF"
+      ],
+      "file": "kernel/bpf/trampoline.c",
+      "function": "",
+      "fix_commit": "56145d237385ca0e7ca9ff7b226aaf2eb8ef368b",
+      "checkout_commit": "56145d237385ca0e7ca9ff7b226aaf2eb8ef368b~1",
+      "subject": "bpf: Fix a UAF issue in bpf_trampoline_link_cgroup_shim",
+      "prebuilt_idx": 5,
+      "callfile_template": "bpf$PROG_LOAD",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[5]. BPF verifier path is directly reachable from bpf syscalls. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-22983",
+      "date": "2026-01-23",
+      "kind": [
+        "NPD"
+      ],
+      "file": "net/ipv4/tcp.c",
+      "function": "",
+      "fix_commit": "7d11e047eda5f98514ae62507065ac961981c025",
+      "checkout_commit": "7d11e047eda5f98514ae62507065ac961981c025~1",
+      "subject": "net: do not write to msg_get_inq in callee",
+      "prebuilt_idx": 3,
+      "callfile_template": "setsockopt$inet_tcp_TCP_CONGESTION",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[3]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-40240",
+      "date": "2025-12-04",
+      "kind": [
+        "NPD"
+      ],
+      "file": "net/sctp/inqueue.c",
+      "function": "",
+      "fix_commit": "441f0647f7673e0e64d4910ef61a5fb8f16bfb82",
+      "checkout_commit": "441f0647f7673e0e64d4910ef61a5fb8f16bfb82~1",
+      "subject": "sctp: avoid NULL dereference when chunk data buffer is missing",
+      "prebuilt_idx": 8,
+      "callfile_template": "connect$inet_sctp",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[8]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-40123",
+      "date": "2025-11-12",
+      "kind": [
+        "NPD"
+      ],
+      "file": "kernel/bpf/core.c",
+      "function": "__bpf_prog_map_compatible",
+      "fix_commit": "4540aed51b12bc13364149bf95f6ecef013197c0",
+      "checkout_commit": "4540aed51b12bc13364149bf95f6ecef013197c0~1",
+      "subject": "bpf: Enforce expected_attach_type for tailcall compatibility",
+      "prebuilt_idx": 5,
+      "callfile_template": "bpf$PROG_LOAD",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[5]. BPF verifier path is directly reachable from bpf syscalls. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2025-40187",
+      "date": "2025-11-12",
+      "kind": [
+        "NPD"
+      ],
+      "file": "net/sctp/sm_statefuns.c",
+      "function": "",
+      "fix_commit": "2f3119686ef50319490ccaec81a575973da98815",
+      "checkout_commit": "2f3119686ef50319490ccaec81a575973da98815~1",
+      "subject": "net/sctp: fix a null dereference in sctp_disposition sctp_sf_do_5_1D_ce()",
+      "prebuilt_idx": 8,
+      "callfile_template": "connect$inet_sctp",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[8]. Net subsystem is typically syscall reachable. Bug class is historically productive for directed fuzzing"
+    },
+    {
+      "cve": "CVE-2026-43089",
+      "date": "2026-05-06",
+      "kind": [
+        "LEAK"
+      ],
+      "file": "net/xfrm/xfrm_user.c",
+      "function": "build_mapping",
+      "fix_commit": "1beb76b2053b68c491b78370794b8ff63c8f8c02",
+      "checkout_commit": "1beb76b2053b68c491b78370794b8ff63c8f8c02~1",
+      "subject": "xfrm_user: fix info leak in build_mapping()",
+      "prebuilt_idx": 9,
+      "callfile_template": "sendmsg$nl_xfrm",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[9]. Net subsystem is typically syscall reachable"
+    },
+    {
+      "cve": "CVE-2026-31671",
+      "date": "2026-04-24",
+      "kind": [
+        "LEAK"
+      ],
+      "file": "net/xfrm/xfrm_user.c",
+      "function": "build_report",
+      "fix_commit": "d10119968d0e1f2b669604baf2a8b5fdb72fa6b4",
+      "checkout_commit": "d10119968d0e1f2b669604baf2a8b5fdb72fa6b4~1",
+      "subject": "xfrm_user: fix info leak in build_report()",
+      "prebuilt_idx": 9,
+      "callfile_template": "sendmsg$nl_xfrm",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[9]. Net subsystem is typically syscall reachable"
+    },
+    {
+      "cve": "CVE-2026-43090",
+      "date": "2026-05-06",
+      "kind": [
+        "LEAK"
+      ],
+      "file": "net/xfrm/xfrm_policy.c",
+      "function": "",
+      "fix_commit": "83317cce60a032c49480dcdabe146435bd689d03",
+      "checkout_commit": "83317cce60a032c49480dcdabe146435bd689d03~1",
+      "subject": "xfrm: fix refcount leak in xfrm_migrate_policy_find",
+      "prebuilt_idx": 9,
+      "callfile_template": "sendmsg$nl_xfrm",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[9]. Net subsystem is typically syscall reachable"
+    },
+    {
+      "cve": "CVE-2026-43035",
+      "date": "2026-05-01",
+      "kind": [
+        "LEAK"
+      ],
+      "file": "net/sched/cls_api.c",
+      "function": "",
+      "fix_commit": "e6e3eb5ee89ac4c163d46429391c889a1bb5e404",
+      "checkout_commit": "e6e3eb5ee89ac4c163d46429391c889a1bb5e404~1",
+      "subject": "net: sched: cls_api: fix tc_chain_fill_node to initialize tcm_info to zero to prevent an info-leak",
+      "prebuilt_idx": 6,
+      "callfile_template": "sendmsg$nl_route_sched",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[6]. Net subsystem is typically syscall reachable"
+    },
+    {
+      "cve": "CVE-2026-31472",
+      "date": "2026-04-22",
+      "kind": [
+        "UNKNOWN"
+      ],
+      "file": "net/xfrm/xfrm_iptfs.c",
+      "function": "__input_process_payload",
+      "fix_commit": "0d10393d5eac33cbd92f7a41fddca12c41d3cb7e",
+      "checkout_commit": "0d10393d5eac33cbd92f7a41fddca12c41d3cb7e~1",
+      "subject": "xfrm: iptfs: validate inner IPv4 header length in IPTFS payload",
+      "prebuilt_idx": 9,
+      "callfile_template": "sendmsg$nl_xfrm",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[9]. Net subsystem is typically syscall reachable"
+    },
+    {
+      "cve": "CVE-2026-31516",
+      "date": "2026-04-22",
+      "kind": [
+        "UNKNOWN"
+      ],
+      "file": "net/xfrm/xfrm_policy.c",
+      "function": "xfrm_policy_fini",
+      "fix_commit": "29fe3a61bcdce398ee3955101c39f89c01a8a77e",
+      "checkout_commit": "29fe3a61bcdce398ee3955101c39f89c01a8a77e~1",
+      "subject": "xfrm: prevent policy_hthresh.work from racing with netns teardown",
+      "prebuilt_idx": 9,
+      "callfile_template": "sendmsg$nl_xfrm",
+      "rationale": "Matches or neighbors PREBUILT_TARGETS[9]. Net subsystem is typically syscall reachable"
+    }
+  ]
+}
