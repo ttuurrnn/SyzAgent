@@ -2765,19 +2765,26 @@ vector<string> getNetDeviceNameByAllocNetdev()
                     {
                         if(CallInst* callInst = dyn_cast<CallInst>(user))
                         {
-                            outs() << "in function: " << callInst->getFunction()->getName() << "\n";
-                            outs() << "alloc_netdev_mqs: " << *callInst << "\n";
+                            Function *caller = callInst->getFunction();
+                            if(!caller || callInst->arg_size() < 2)
+                                continue;
+
+                            outs() << "alloc_netdev_mqs call in function: " << caller->getName() << "\n";
                             Value* op = callInst->getArgOperand(1);
-                            if(op->getValueID() == Value::ConstantExprVal)
-                            {
-                                ConstantExpr* expr = dyn_cast<ConstantExpr>(op);
-                                if(expr->getOpcode() == Instruction::GetElementPtr)
-                                {
-                                    string str = getDeviceString(op);
-                                    outs() << "str: " << str << "\n";
-                                    res.push_back(str);
-                                }
-                            }
+                            GEPOperator *gep = dyn_cast_or_null<GEPOperator>(op);
+                            if(!gep)
+                                continue;
+
+                            auto strGlobal = dyn_cast<GlobalVariable>(gep->getPointerOperand());
+                            if(!strGlobal || !strGlobal->hasInitializer())
+                                continue;
+
+                            string str = getDeviceString(op);
+                            if(str == "?")
+                                continue;
+
+                            outs() << "str: " << str << "\n";
+                            res.push_back(str);
                         }
                     }
                 }

@@ -29,6 +29,9 @@
 #include <sstream>
 #include <sys/resource.h>
 #include <filesystem>
+#include <cstdlib>
+#include <cctype>
+#include <set>
 #include <boost/algorithm/string/predicate.hpp>
 
 #include "Analyzer.h"
@@ -56,6 +59,34 @@
 #include "time.h"
 
 using namespace llvm;
+
+static std::set<std::string> parseAllowedSignatureSyscalls() {
+  std::set<std::string> allowed;
+  const char *env = std::getenv("SYZDIRECT_SIGNATURE_SYSCALLS");
+  if (!env || !*env) {
+    return allowed;
+  }
+
+  std::stringstream ss(env);
+  std::string item;
+  while (std::getline(ss, item, ',')) {
+    std::string trimmed;
+    for (char c : item) {
+      if (!std::isspace(static_cast<unsigned char>(c))) {
+        trimmed.push_back(c);
+      }
+    }
+    if (!trimmed.empty()) {
+      allowed.insert(trimmed);
+    }
+  }
+  return allowed;
+}
+
+static bool signatureSyscallAllowed(const std::set<std::string> &allowed,
+                                    const std::string &syscall) {
+  return allowed.empty() || allowed.count(syscall) != 0;
+}
 
 cl::opt<string> TargetPointFile(
   "target-points", cl::desc("File that contain target point information (idx src_file:line)")
@@ -444,13 +475,25 @@ int main(int argc, char **argv) {
   DeviceExtractorPass DEPass(&GlobalCtx);
   DEPass.run(GlobalCtx.Modules);
 
-  // Filesystem extract
-  FilesystemExtractorPass FSEPass(&GlobalCtx);
-  FSEPass.run(GlobalCtx.Modules);
+  // Filesystem extraction is auxiliary for non-filesystem targets.  Keep it
+  // controllable because LLVM 18 opaque-pointer bitcode can crash this pass on
+  // some modern filesystem globals.
+  if (std::getenv("SYZDIRECT_SKIP_FILESYSTEM_EXTRACTOR")) {
+    OP << "[FilesystemExtractor] Skipped by SYZDIRECT_SKIP_FILESYSTEM_EXTRACTOR\n";
+  } else {
+    FilesystemExtractorPass FSEPass(&GlobalCtx);
+    FSEPass.run(GlobalCtx.Modules);
+  }
 
-  // // Network interface extract
-  NetworkInterfaceExtractorPass NIEPass(&GlobalCtx);
-  NIEPass.run(GlobalCtx.Modules);
+  // Network interface extraction is auxiliary for directed non-socket targets.
+  // Keep it controllable because LLVM 18 opaque-pointer bitcode can crash this
+  // pass on some large network tables.
+  if (std::getenv("SYZDIRECT_SKIP_NETWORK_INTERFACE_EXTRACTOR")) {
+    OP << "[NetworkInterfaceExtractor] Skipped by SYZDIRECT_SKIP_NETWORK_INTERFACE_EXTRACTOR\n";
+  } else {
+    NetworkInterfaceExtractorPass NIEPass(&GlobalCtx);
+    NIEPass.run(GlobalCtx.Modules);
+  }
 
   getNetDeviceNameByAllocNetdev();
 
@@ -750,11 +793,15 @@ int main(int argc, char **argv) {
   raw_fd_ostream constraintsDebug(StringRef("./constraintsDebug"), OutErrorInfo, sys::fs::CD_CreateAlways);
   raw_fd_ostream signatureFile(StringRef("./kernel_signature_full"), OutErrorInfo, sys::fs::CD_CreateAlways);
   raw_fd_ostream signatureFileWithInfo(StringRef("./kernel_signature_with_info_full"), OutErrorInfo, sys::fs::CD_CreateAlways);
+  std::set<std::string> allowedSignatureSyscalls = parseAllowedSignatureSyscalls();
   outs() << "start output\n";
   outs() << "common syscall number: " << GlobalCtx.AllSignatures.size() << "\n";
 
   for (auto signature: GlobalCtx.AllSignatures) {
     string str = signature->getSyscallType();
+    if (!signatureSyscallAllowed(allowedSignatureSyscalls, str)) {
+      continue;
+    }
     map<unsigned, ConstBlockMap> ArgumentsConstMap = signature->getArgConstBlockMap();
     Function* func = signature->getHandlerFunction();
     if(func->isDeclaration() || func->getInstructionCount() == 0)
@@ -868,6 +915,9 @@ int main(int argc, char **argv) {
               auto wrapperSyscall = wrapperItem.first;
               auto wrapperTarget = wrapperItem.second.first;
               auto resIdx = wrapperItem.second.second;
+              if (!signatureSyscallAllowed(allowedSignatureSyscalls, wrapperSyscall)) {
+                continue;
+              }
               outputBBInfo(nullptr, signatureFileWithInfo);
               if (syscallName == wrapperTarget && handlerFunc) {
                 signatureFileWithInfo << wrapperSyscall;
@@ -912,6 +962,9 @@ int main(int argc, char **argv) {
     GlobalCtx.FoundFunctionCache = map<Function*, map<unsigned, ConstBlockMap>>();
     auto syscall = item.first;
     auto syscallFunction = SyscallEntryFunctionPtr[syscall];
+    if (!signatureSyscallAllowed(allowedSignatureSyscalls, syscall)) {
+      continue;
+    }
 
     if(allDeviceName.count(syscall) == 0)
       allDeviceName[syscall] = set<string>();

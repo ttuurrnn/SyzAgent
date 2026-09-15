@@ -31,6 +31,34 @@
 
 using namespace llvm;
 
+// Safe StructType name comparison — guards against literal/unnamed structs (LLVM 18 opaque ptrs)
+static inline bool structTypeIs(ConstantStruct *cs, StringRef name) {
+    if (!cs) return false;
+    auto *ty = cs->getType();
+    return !ty->isLiteral() && ty->hasName() && ty->getName() == name;
+}
+
+static inline bool structTypeStartsWith(ConstantStruct *cs, StringRef name) {
+    if (!cs) return false;
+    auto *ty = cs->getType();
+    return !ty->isLiteral() && ty->hasName() && ty->getName().startswith(name);
+}
+
+static ConstantStruct* unwrapKernelStruct(ConstantStruct *cs, StringRef name) {
+    if (!cs) return nullptr;
+    if (structTypeStartsWith(cs, name)) return cs;
+    if (cs->getNumOperands() == 0) return cs;
+    if (auto *inner = dyn_cast<ConstantStruct>(cs->getOperand(0))) {
+        if (structTypeStartsWith(inner, name)) return inner;
+    }
+    return cs;
+}
+
+static Value* structOperandOrNull(ConstantStruct *cs, unsigned idx) {
+    if (!cs || idx >= cs->getNumOperands()) return nullptr;
+    return cs->getOperand(idx);
+}
+
 // Helper: resolve a Value to a Function*, handling opaque pointer ConstantExpr bitcasts.
 static Function* resolveFunction(Value* V) {
     if (!V) return nullptr;
@@ -47,15 +75,16 @@ map<std::string, Function*> DeviceExtractorPass::ProcessFileOperations(Value* ha
     }
     if (auto constantStruct = dyn_cast<ConstantStruct>(handlerStruct)) {
         // file operations
+        constantStruct = unwrapKernelStruct(constantStruct, "struct.file_operations");
         outs() << "file operations: " << *constantStruct << "\n";
-        if (constantStruct->getType()->getName() != "struct.file_operations") {
+        if (!structTypeStartsWith(constantStruct, "struct.file_operations")) {
             return result;
         }
-        auto handlerRead = constantStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["read"]);
-        auto handlerWrite = constantStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["write"]);
-        auto handlerIoctl = constantStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["unlocked_ioctl"]);
-        auto handlerOpen = constantStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["open"]);
-        auto handlerMmap = constantStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["mmap"]);
+        auto handlerRead = structOperandOrNull(constantStruct, Ctx->StructFieldIdx["file_operations"]["read"]);
+        auto handlerWrite = structOperandOrNull(constantStruct, Ctx->StructFieldIdx["file_operations"]["write"]);
+        auto handlerIoctl = structOperandOrNull(constantStruct, Ctx->StructFieldIdx["file_operations"]["unlocked_ioctl"]);
+        auto handlerOpen = structOperandOrNull(constantStruct, Ctx->StructFieldIdx["file_operations"]["open"]);
+        auto handlerMmap = structOperandOrNull(constantStruct, Ctx->StructFieldIdx["file_operations"]["mmap"]);
         if (auto *readFunc = resolveFunction(handlerRead)) {
             result["read"] = readFunc;
             GlobalCtx.FunctionArgMap[readFunc->getName().str()] = {1, 2, 4, 0};
@@ -64,7 +93,7 @@ map<std::string, Function*> DeviceExtractorPass::ProcessFileOperations(Value* ha
             result["write"] = writeFunc;
             GlobalCtx.FunctionArgMap[writeFunc->getName().str()] = {1, 2, 4, 0};
         } else {
-            handlerWrite = constantStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["write_iter"]);
+            handlerWrite = structOperandOrNull(constantStruct, Ctx->StructFieldIdx["file_operations"]["write_iter"]);
             if (auto *writeIterFunc = resolveFunction(handlerWrite)) {
                 result["write"] = writeIterFunc;
             }
@@ -245,19 +274,37 @@ void DeviceExtractorPass::ProcessMiscDeviceInit(CallInst* callInst) {
     if (auto gv = dyn_cast<GlobalVariable>(arg)) {
         if (gv->getValueType()->isStructTy()) {
             if (auto constStruct = dyn_cast<ConstantStruct>(gv->getInitializer())) {
+                constStruct = unwrapKernelStruct(constStruct, "struct.miscdevice");
                 outs() << *constStruct << "\n";
-                auto minorVal = constStruct->getOperand(0);
+                auto minorVal = structOperandOrNull(constStruct, 0);
+                if (!minorVal) {
+                    outs() << "[-] malformed miscdevice: missing minor field\n";
+                    Ctx->SubsystemInfo.push_back(deviceInfoItem);
+                    return;
+                }
                 auto minor = getIntValue(minorVal);
                 outs() << "[+] Minor: " << minor << "\n";
                 deviceInfoItem->minor = minor;
-                auto deviceNameVal = constStruct->getOperand(1);
+                auto deviceNameVal = structOperandOrNull(constStruct, 1);
+                if (!deviceNameVal) {
+                    outs() << "[-] malformed miscdevice: missing name field\n";
+                    Ctx->SubsystemInfo.push_back(deviceInfoItem);
+                    return;
+                }
                 auto deviceName = getDeviceString(deviceNameVal);
                 deviceInfoItem->name = deviceName;
                 outs() << "[+] Device name: " << deviceName << "\n";
-                auto fileOperations = getStructValue(constStruct->getOperand(2));
-                if (fileOperations == nullptr && Ctx->GlobalStructMap.count(constStruct->getOperand(2)->getName().str())) {
-                    outs() << *(Ctx->GlobalStructMap[constStruct->getOperand(2)->getName().str()]) << '\n';
-                    fileOperations = getStructValue(Ctx->GlobalStructMap[constStruct->getOperand(2)->getName().str()]);
+                auto fopsVal = structOperandOrNull(constStruct, 2);
+                if (!fopsVal) {
+                    outs() << "[-] malformed miscdevice: missing fops field\n";
+                    Ctx->SubsystemInfo.push_back(deviceInfoItem);
+                    return;
+                }
+                auto fileOperations = getStructValue(fopsVal);
+                if (fileOperations == nullptr && fopsVal->hasName() &&
+                    Ctx->GlobalStructMap.count(fopsVal->getName().str())) {
+                    outs() << *(Ctx->GlobalStructMap[fopsVal->getName().str()]) << '\n';
+                    fileOperations = getStructValue(Ctx->GlobalStructMap[fopsVal->getName().str()]);
                 }
                 if (fileOperations) {
                     outs() << "[+] Operations: " << *fileOperations << "\n";
@@ -533,9 +580,11 @@ set<Value*>* DeviceExtractorPass::GetAliasOfStructType(Value* value, string stru
                 ElemType = GEP->getResultElementType();
             if (ElemType) {
                 if (auto aliasStruct = dyn_cast<StructType>(ElemType)) {
-                    outs() << "Alias: " << *A << " " << aliasStruct->getName() << "\n";
-                    if (aliasStruct->getName() == structName) {
-                        resSet->insert(A);
+                    if (!aliasStruct->isLiteral() && aliasStruct->hasName()) {
+                        outs() << "Alias: " << *A << " " << aliasStruct->getName() << "\n";
+                        if (aliasStruct->getName() == structName) {
+                            resSet->insert(A);
+                        }
                     }
                 }
             }
@@ -891,7 +940,7 @@ bool DeviceExtractorPass::doFinalization(Module * M) {
             if (!memdevlistArray) continue;
             for (int i = 0; i < memdevlistArray->getNumOperands(); i++) {
                 auto memdev = dyn_cast<ConstantStruct>(memdevlistArray->getOperand(i));
-                if (memdev && memdev->getType()->getName() == "struct.memdev") {
+                if (memdev && structTypeIs(memdev, "struct.memdev")) {
                     outs() << "memdev: " << *memdev << "\n";
                     auto deviceInfoItem = new DeviceInfoItem();
                     deviceInfoItem->ItemType = DEVICE;
@@ -911,7 +960,7 @@ bool DeviceExtractorPass::doFinalization(Module * M) {
         if (g->hasInitializer()) {
             auto constStruct = dyn_cast<ConstantStruct>(g->getInitializer());
             // posix clock
-            if (constStruct && constStruct->getType()->getName() == "struct.posix_clock_operations") {
+            if (structTypeIs(constStruct, "struct.posix_clock_operations")) {
                 auto deviceInfoItem = new DeviceInfoItem();
                 deviceInfoItem->ItemType = DEVICE;
                 deviceInfoItem->type = CHARDEVICE;
@@ -929,7 +978,7 @@ bool DeviceExtractorPass::doFinalization(Module * M) {
             } else if (auto constArray = dyn_cast<ConstantArray>(g->getInitializer())) {
                 for (auto i = 0; i < constArray->getNumOperands(); i++) {
                     auto constStruct = dyn_cast<ConstantStruct>(constArray->getOperand(i));
-                    if (constStruct && constStruct->getType()->getName() == "struct.cftype") {
+                    if (structTypeIs(constStruct, "struct.cftype")) {
                         auto deviceInfoItem = new DeviceInfoItem();
                         deviceInfoItem->ItemType = DEVICE;
                         deviceInfoItem->type = CHARDEVICE;
@@ -952,7 +1001,7 @@ bool DeviceExtractorPass::doFinalization(Module * M) {
                             deviceInfoItem->SyscallHandler["write"] = writeFunc;
                             Ctx->SubsystemInfo.push_back(deviceInfoItem);
                         }
-                    } else if (constStruct && constStruct->getType()->getName() == "struct.ctl_table") {
+                    } else if (structTypeIs(constStruct, "struct.ctl_table")) {
                         auto deviceInfoItem = new DeviceInfoItem();
                         deviceInfoItem->ItemType = DEVICE;
                         deviceInfoItem->type = CHARDEVICE;

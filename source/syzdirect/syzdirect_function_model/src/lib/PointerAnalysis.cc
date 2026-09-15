@@ -196,37 +196,26 @@ bool PointerAnalysisPass::doModulePass(Module *M) {
 	TLI = new TargetLibraryInfo(TLII);
 
 	// Run BasicAliasAnalysis pass on each function in this module.
-	// XXX: more complicated alias analyses may be required.
+	// AAResultsWrapperPass is a FunctionPass; getAAResults() is only valid
+	// immediately after FPasses->run(F) — before doFinalization() clears it.
 	legacy::FunctionPassManager *FPasses = new legacy::FunctionPassManager(M);
 	AAResultsWrapperPass *AARPass = new AAResultsWrapperPass();
 
 	FPasses->add(AARPass);
-
 	FPasses->doInitialization();
+
 	for (Function &F : *M) {
-		if (F.isDeclaration())
+		if (F.isDeclaration() || F.empty())
 			continue;
 		FPasses->run(F);
-	}
-	FPasses->doFinalization();
 
-	// Basic alias analysis result.
-	AAResults &AAR = AARPass->getAAResults();
-
-	for (Module::iterator f = M->begin(), fe = M->end();
-			f != fe; ++f) {
-		Function *F = &*f;
+		// getAAResults() is valid here: AARPass just ran on F.
+		AAResults &AAR = AARPass->getAAResults();
 		PointerAnalysisMap aliasPtrs;
-
-		if (F->empty())
-			continue;
-
-		detectAliasPointers(F, AAR, aliasPtrs);
-
-		// Save pointer analysis result.
-		Ctx->FuncPAResults[F] = aliasPtrs;
-		Ctx->FuncAAResults[F] = &AAR;
+		detectAliasPointers(&F, AAR, aliasPtrs);
+		Ctx->FuncPAResults[&F] = aliasPtrs;
 	}
 
+	FPasses->doFinalization();
 	return false;
 }

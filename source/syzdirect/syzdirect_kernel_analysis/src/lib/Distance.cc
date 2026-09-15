@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/IR/DebugInfoMetadata.h"   // DISubprogram, for A1 source-path filtering
 
 #include "Distance.h"
 #include "Common.h"
@@ -10,6 +11,45 @@
 const int MAX_VALUE = 1000000;
 const int C = 100;
 const int MAGNIFY_FLOAT = 10;
+
+// A1: subsystem prefix (first `depth` kernel-source components) of a function's
+// source file, e.g. "net/netfilter" for
+// srcs/case_0/net/netfilter/nf_conntrack_netlink.c. The debug-info path carries
+// a build prefix (srcs/case_0/...), so we skip leading components until a known
+// kernel top-level directory, then take `depth` components (excluding the
+// basename). Returns "" when debug info is unavailable or the path is not under
+// a recognized subsystem (caller then keeps the edge — conservative).
+static string subsystemPrefix(Function *F, int depth) {
+    if (!F) return "";
+    DISubprogram *SP = F->getSubprogram();
+    if (!SP) return "";
+    string fn = SP->getFilename().str();
+
+    vector<string> comps;
+    string cur;
+    for (char c : fn) {
+        if (c == '/') { if (!cur.empty()) comps.push_back(cur); cur.clear(); }
+        else cur += c;
+    }
+    if (!cur.empty()) comps.push_back(cur);   // basename (e.g. foo.c)
+
+    static const set<string> kroots = {
+        "net", "fs", "kernel", "mm", "drivers", "crypto", "block", "arch",
+        "security", "sound", "virt", "ipc", "lib", "io_uring",
+    };
+    size_t start = 0;
+    for (; start < comps.size(); ++start)
+        if (kroots.count(comps[start])) break;
+    if (start >= comps.size()) return "";   // no recognizable subsystem
+
+    string prefix;
+    for (int k = 0; k < depth && start + k < comps.size(); ++k) {
+        if (start + k == comps.size() - 1) break;   // never include the basename
+        if (!prefix.empty()) prefix += "/";
+        prefix += comps[start + k];
+    }
+    return prefix;
+}
 
 static bool isBlacklisted(const string &funcName) {
     static const SmallVector<std::string, 14> Blacklist = {
@@ -48,26 +88,51 @@ void DistanceCal::getFunctionDistance() {
     queue<Function*> q;
     q.push(targetFunc);
     funcDistance[targetFunc] = 0;
+    // A1: only filter the target's *direct* caller layer. Deeper layers must be
+    // left intact, otherwise the legitimate syscall->dispatch path (which
+    // legitimately crosses subsystems, e.g. net/socket -> net/netlink ->
+    // net/netfilter) would be severed and the gradient destroyed.
+    string targetSubsys = subsystemPrefix(targetFunc, 2);
     while (!q.empty()) {
         Function * F = q.front();
         q.pop();
         int fdist = funcDistance[F];
+        bool filterIndirect = (F == targetFunc) && !targetSubsys.empty();
+        int dropped = 0;
         for (auto callerInst: GlobalCtx.Callers[F]) {
             Function *callerFunc = callerInst->getFunction();
             if (isBlacklisted(callerFunc->getName().str())) {
                 continue;
             }
-           
+            // A1: at the target's direct-caller layer, drop function-pointer
+            // type-collision indirect edges whose caller lives in a different
+            // subsystem. Direct calls are precise and always kept; this only
+            // removes the over-approximation that pollutes the distance-10
+            // layer for callback-dispatched targets (netlink/nft handlers).
+            if (filterIndirect && callerInst->isIndirectCall()) {
+                string callerSubsys = subsystemPrefix(callerFunc, 2);
+                if (!callerSubsys.empty() && callerSubsys != targetSubsys) {
+                    dropped++;
+                    continue;
+                }
+            }
+
              if (funcDistance.count(callerFunc) == 0 || funcDistance[callerFunc] > fdist + 1){
                 funcDistance[callerFunc] = fdist + 1;
                 q.push(callerFunc);
             } 
             if (callInstToTFDistance.count(callerInst) == 0 || callInstToTFDistance[callerInst] > fdist) {
                 callInstToTFDistance[callerInst] = fdist;
-            } 
+            }
+        }
+        if (filterIndirect && dropped > 0) {
+            outs() << "[A1] pruned " << dropped
+                   << " cross-subsystem indirect callers of "
+                   << targetFunc->getName()
+                   << " (kept subsystem '" << targetSubsys << "')\n";
         }
     }
-    
+
     for (auto &item: funcDistance) {
         funcMap[item.first->getName()] = item.first;
     }

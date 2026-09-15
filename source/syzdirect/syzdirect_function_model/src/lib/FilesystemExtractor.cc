@@ -28,6 +28,27 @@
 
 using namespace llvm;
 
+static inline bool structTypeStartsWith(ConstantStruct *cs, StringRef name) {
+    if (!cs) return false;
+    auto *ty = cs->getType();
+    return !ty->isLiteral() && ty->hasName() && ty->getName().startswith(name);
+}
+
+static ConstantStruct* unwrapKernelStruct(ConstantStruct *cs, StringRef name) {
+    if (!cs) return nullptr;
+    if (structTypeStartsWith(cs, name)) return cs;
+    if (cs->getNumOperands() == 0) return cs;
+    if (auto *inner = dyn_cast<ConstantStruct>(cs->getOperand(0))) {
+        if (structTypeStartsWith(inner, name)) return inner;
+    }
+    return cs;
+}
+
+static Constant* structOperandOrNull(ConstantStruct *cs, unsigned idx) {
+    if (!cs || idx >= cs->getNumOperands()) return nullptr;
+    return cs->getOperand(idx);
+}
+
 // Helper: resolve a Value to a Function*, handling opaque pointer ConstantExpr bitcasts.
 static Function* resolveFunction(Value* V) {
     if (!V) return nullptr;
@@ -38,6 +59,7 @@ static Function* resolveFunction(Value* V) {
 }
 
 string getFilesystemNameString(Value *currVal) {
+    if (!currVal) return "?";
     const GEPOperator *gep = dyn_cast<GEPOperator>(currVal);
     const llvm::GlobalVariable *strGlobal = nullptr;
     if(gep != nullptr) {
@@ -381,20 +403,32 @@ void FilesystemExtractorPass::HandleFsTypeStruct(GlobalVariable* globalVar, File
         outs() << "[+] type: (non-struct, skipping)\n";
         return;
     }
-    outs() << "[+] type: " << globalVar->getValueType()->getStructName() << "\n";
+    {
+        auto *st = cast<StructType>(globalVar->getValueType());
+        if (st->isLiteral() || !st->hasName()) {
+            outs() << "[+] type: (literal/unnamed struct, skipping)\n";
+            return;
+        }
+        outs() << "[+] type: " << st->getName() << "\n";
+    }
     if (!constStruct) {
         outs() << "[!] Could not cast initializer to ConstantStruct, skipping\n";
         return;
     }
+    constStruct = unwrapKernelStruct(constStruct, "struct.file_system_type");
+    if (!structTypeStartsWith(constStruct, "struct.file_system_type")) {
+        outs() << "[!] Unexpected filesystem type initializer, skipping\n";
+        return;
+    }
     // constStruct->ge
-    Constant* filesystemNameVal = constStruct->getOperand(Ctx->StructFieldIdx["file_system_type"]["name"]);
+    Constant* filesystemNameVal = structOperandOrNull(constStruct, Ctx->StructFieldIdx["file_system_type"]["name"]);
     string filesystemName = getFilesystemNameString(filesystemNameVal);
     outs() << "str: " << filesystemName << "\n";
     filesystemInfoItem->name = filesystemName;
     filesystemInfoItem->filesystemTypeStruct = globalVar;
-    Constant* mountFuncPtr = constStruct->getOperand(Ctx->StructFieldIdx["file_system_type"]["mount"]);
-    Constant* initfsctxFuncPtr = constStruct->getOperand(Ctx->StructFieldIdx["file_system_type"]["init_fs_context"]);
-    if(!mountFuncPtr->isNullValue())
+    Constant* mountFuncPtr = structOperandOrNull(constStruct, Ctx->StructFieldIdx["file_system_type"]["mount"]);
+    Constant* initfsctxFuncPtr = structOperandOrNull(constStruct, Ctx->StructFieldIdx["file_system_type"]["init_fs_context"]);
+    if(mountFuncPtr && !mountFuncPtr->isNullValue())
     {
         Function* mountFunc = dyn_cast<Function>(mountFuncPtr);
         if(!mountFunc) {
@@ -466,7 +500,7 @@ void FilesystemExtractorPass::HandleFsTypeStruct(GlobalVariable* globalVar, File
             }
         }
     }
-    if(!initfsctxFuncPtr->isNullValue())
+    if(initfsctxFuncPtr && !initfsctxFuncPtr->isNullValue())
     {
         Function* initfsctxFunc = dyn_cast<Function>(initfsctxFuncPtr);
         if(!initfsctxFunc) {
@@ -537,7 +571,7 @@ vector<GlobalVariable*> getOperStruct(Module* M, const char* StrucName)
             {
                 res.push_back(globalVar);
             }
-            else if(globalVar->getValueType()->isStructTy() && globalVar->getValueType()->getStructName().str() == string("struct.")+StrucName)
+            else if(globalVar->getValueType()->isStructTy() && !cast<StructType>(globalVar->getValueType())->isLiteral() && cast<StructType>(globalVar->getValueType())->hasName() && globalVar->getValueType()->getStructName().str() == string("struct.")+StrucName)
             {
                 res.push_back(globalVar);
             }
@@ -554,11 +588,13 @@ vector<pair<string, Function*>> FilesystemExtractorPass::getHandlerFromFileOpera
         constStruct = dyn_cast<ConstantStruct>(Ctx->GlobalStructMap[globalVar->getName().str()]);
     } 
     if (!constStruct) return res;
-    Constant* handlerRead = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["read"]);
-    Constant* handlerWrite = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["write"]);
-    Constant* handlerIoctl = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["unlocked_ioctl"]);
-    Constant* handlerOpen = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["open"]);
-    Constant* handlerMmap = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["mmap"]);
+    constStruct = unwrapKernelStruct(constStruct, "struct.file_operations");
+    if (!structTypeStartsWith(constStruct, "struct.file_operations")) return res;
+    Constant* handlerRead = structOperandOrNull(constStruct, Ctx->StructFieldIdx["file_operations"]["read"]);
+    Constant* handlerWrite = structOperandOrNull(constStruct, Ctx->StructFieldIdx["file_operations"]["write"]);
+    Constant* handlerIoctl = structOperandOrNull(constStruct, Ctx->StructFieldIdx["file_operations"]["unlocked_ioctl"]);
+    Constant* handlerOpen = structOperandOrNull(constStruct, Ctx->StructFieldIdx["file_operations"]["open"]);
+    Constant* handlerMmap = structOperandOrNull(constStruct, Ctx->StructFieldIdx["file_operations"]["mmap"]);
     {
         Function* readFunc = resolveFunction(handlerRead);
         if(readFunc != nullptr)
@@ -590,7 +626,7 @@ vector<pair<string, Function*>> FilesystemExtractorPass::getHandlerFromFileOpera
         }
         else
         {
-            handlerWrite = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["write_iter"]);
+            handlerWrite = structOperandOrNull(constStruct, Ctx->StructFieldIdx["file_operations"]["write_iter"]);
             Function* writeIterFunc = resolveFunction(handlerWrite);
             if(writeIterFunc != nullptr && writeIterFunc->getInstructionCount() == 0)
             {
@@ -669,10 +705,12 @@ vector<pair<string, Function*>> FilesystemExtractorPass::getHandlerFromASOperati
         constStruct = dyn_cast<ConstantStruct>(Ctx->GlobalStructMap[globalVar->getName().str()]);
     } 
     if (!constStruct) return res;
+    constStruct = unwrapKernelStruct(constStruct, "struct.address_space_operations");
+    if (!structTypeStartsWith(constStruct, "struct.address_space_operations")) return res;
     auto &asStructMap = Ctx->StructFieldIdx["address_space_operations"];
 
     for (auto readFuncName: {"readpage", "readpages"}) {
-        Constant* handler = constStruct->getOperand(asStructMap[readFuncName]);
+        Constant* handler = structOperandOrNull(constStruct, asStructMap[readFuncName]);
         Function* readFunc = resolveFunction(handler);
         if (!readFunc) {
             continue;
@@ -919,7 +957,7 @@ bool FilesystemExtractorPass::doModulePass(Module* M)
                             for(GlobalVariable* gv : fileOperations)
                             {
                                 outs() << "file operations name: " << gv->getName() << "\n";
-                                outs() << "file operations type: " << (gv->getValueType()->isStructTy() ? gv->getValueType()->getStructName() : "non-struct") << "\n";
+                                outs() << "file operations type: " << (gv->getValueType()->isStructTy() && cast<StructType>(gv->getValueType())->hasName() ? gv->getValueType()->getStructName() : StringRef("non-struct")) << "\n";
                                 if(find(filesystemInfoItem->fileOperations.begin(), filesystemInfoItem->fileOperations.end(), gv) != filesystemInfoItem->fileOperations.end())
                                     continue;
                                 filesystemInfoItem->fileOperations.push_back(gv);
@@ -1088,4 +1126,3 @@ string SpecialFSItem::generateDeviceSignature(Function* func){
     else
         return name;
 }
-

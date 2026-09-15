@@ -33,6 +33,9 @@ bool endsWith(std::string const & value, std::string const & ending)
 }
 
 int getIntValue(Value* value) {
+    if (!value)
+        return -1;
+
     auto constVal = dyn_cast<ConstantInt>(value);
     if (constVal) {
         return constVal->getZExtValue();
@@ -62,6 +65,9 @@ int getIntValue(Value* value) {
 
 // from DIFUZE
 string getDeviceString(Value *currVal) {
+    if (!currVal)
+        return "?";
+
     const GEPOperator *gep = dyn_cast<GEPOperator>(currVal);
     const llvm::GlobalVariable *strGlobal = nullptr;
     if(gep != nullptr) {
@@ -72,8 +78,10 @@ string getDeviceString(Value *currVal) {
         const ConstantDataArray *currDArray = dyn_cast<ConstantDataArray>(currConst);
         string res = "";
         raw_string_ostream ss(res);
-        if(currDArray != nullptr) {
+        if(currDArray != nullptr && currDArray->isCString()) {
             ss << currDArray->getAsCString();
+        } else if(currDArray != nullptr) {
+            ss << currDArray->getAsString();
         } else {
             ss << *currConst;
         }
@@ -89,8 +97,15 @@ string getDeviceString(Value *currVal) {
 }
 
 Value* getStructValue(Value* value) {
+    if (!value)
+        return nullptr;
+
     auto handlerStructGV = dyn_cast<GlobalVariable>(value);
-    if (handlerStructGV && handlerStructGV->hasInitializer()) {
+    if (handlerStructGV) {
+        if (!handlerStructGV->hasInitializer()) {
+            outs() << "[-] No initializer for global variable\n";
+            return nullptr;
+        }
         auto initializer = handlerStructGV->getInitializer();
         if (initializer) {
             auto handlerStruct = dyn_cast<ConstantStruct>(initializer);
@@ -98,29 +113,25 @@ Value* getStructValue(Value* value) {
                 return dyn_cast<Value>(handlerStruct);
                 outs() << "[+] Struct value: " << *handlerStruct << "\n";
             } else {
-                outs() << "[-] Non-constant struct value: " << *(initializer) << "\n";
-                outs() << "\t[-] Users: \n";
-                for (auto user : handlerStructGV->users()) {
-                    outs() << "\t\t" << *user << "\n";
-                } 
+                outs() << "[-] Non-constant struct value\n";
             }
         } else {
-            outs() << "[-] No initializer for struct: " << *value << "\n";
+            outs() << "[-] No initializer for struct\n";
         }
     } else if (auto bitcastOp = dyn_cast<BitCastOperator>(value)) {
-        outs() << "[-] BitCastOp: " << *bitcastOp << "\n";
+        outs() << "[-] BitCastOp\n";
         auto castVal = bitcastOp->getOperand(0);
-        outs() << "\t[-] CastVal: " << *castVal << "\n";
+        outs() << "\t[-] CastVal\n";
         return getStructValue(castVal);
     } else {
-        outs() << "[-] Local struct: " << *value << "\n";
+        outs() << "[-] Local struct\n";
         if (isa<PHINode>(value)) {
             auto phiVal = dyn_cast<PHINode>(value);
             // TODO: phi node 
             return getStructValue(phiVal->getIncomingValue(0));
         }
         if (isa<Argument>(value)) {
-            outs() << "\t[-] Argument: " << *value << "\n";
+            outs() << "\t[-] Argument\n";
         }
     }
     return nullptr;

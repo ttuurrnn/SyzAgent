@@ -49,6 +49,8 @@ bool CommonSyscallExtractorPass::doInitialization(Module *M) {
         }
         if (g->getValueType()->isStructTy()) {
             if (auto structType = dyn_cast<StructType>(g->getValueType())) {
+                if (structType->isLiteral() || !structType->hasName())
+                    continue;
                 auto structTypeName = structType->getName();
                 if (structTypeName == "struct.key_type") {
                     outs() << *g << "\n";

@@ -573,7 +573,7 @@ void findConstFromIf(vector<pair<Function*, Instruction*>> &callTrace, set<pair<
 							// opaque ptr: only one level
 							break;
 						}
-						if (allocTy->isStructTy() && allocTy->getStructName() == "struct.nlattr")
+						if (allocTy->isStructTy() && cast<StructType>(allocTy)->hasName() && allocTy->getStructName() == "struct.nlattr")
 							isNlattr = true;
 					}
 					if (!isNlattr)

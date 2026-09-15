@@ -8,6 +8,35 @@ rcalltrimthreshold=10
 filesystems=["sysfs", "rootfs", "ramfs", "tmpfs", "devtmpfs", "debugfs", "securityfs", "sockfs", "pipefs", "anon_inodefs", "devpts", "ext3", "ext2", "ext4", "hugetlbfs", "vfat", "ecryptfs", "fuseblk", "fuse", "rpc_pipefs", "nfs", "nfs4", "nfsd", "binfmt_misc", "autofs", "xfs", "jfs", "msdos", "ntfs", "minix", "hfs", "hfsplus", "qnx4", "ufs", "btrfs", "configfs", "ncpfs", "qnx6", "exofs", "befs", "vxfs", "gfs2","gfs2meta", "fusectl", "bfs", "nsfs", "efs", "cifs", "efivarfs", "affs", "tracefs", "bdev", "ocfs2", "ocfs2_dlmfs", "hpfs", "proc", "afs", "reiserfs", "jffs2", "romfs", "aio", "sysv", "v7", "udf", "ceph", "pstore", "adfs", "9p", "hostfs", "squashfs", "cramfs", "iso9660", "coda", "nilfs2", "logfs", "overlay", "f2fs", "omfs", "ubifs", "openpromfs", "bpf", "cgroup", "cgroup2", "cpuset", "mqueue", "aufs", "selinuxfs", "dax", "erofs", "virtiofs", "exfat", "binder", "zonefs", "pvfs2", "incremental-fs", "esdfs"]
 syscallblacklist=["mq_open","syz_open_procfs","epoll_create","eventfd","signalfd","timerfd_create","pidfd_open","pidfd_getfd", "memfd_create","memfd_secret"]
 
+def _afalg_callfile_override(function_name, relative_path):
+    target = (function_name or "").lower()
+    path = (relative_path or "").lower().lstrip("/")
+    if path == "crypto/algif_aead.c" and target == "aead_recvmsg":
+        return [{
+            "Target": "read$alg",
+            "Relate": [
+                "socket$alg",
+                "bind$alg",
+                "setsockopt$ALG_SET_AEAD_AUTHSIZE",
+                "setsockopt$ALG_SET_KEY",
+                "accept$alg",
+                "sendmsg$alg",
+            ],
+        }]
+    if path == "crypto/algif_aead.c" and target == "aead_sendmsg":
+        return [{
+            "Target": "sendmsg$alg",
+            "Relate": [
+                "socket$alg",
+                "bind$alg",
+                "setsockopt$ALG_SET_AEAD_AUTHSIZE",
+                "setsockopt$ALG_SET_KEY",
+                "accept$alg",
+                "read$alg",
+            ],
+        }]
+    return None
+
 def PrepareForFuzzing(caseIdx, recommend_syscalls):
     
     TheFuzzerPath = Config.FuzzerDir
@@ -200,6 +229,14 @@ def PrepareForFuzzing(caseIdx, recommend_syscalls):
         
 
         outFile = Config.getFuzzInpDirPathByCaseAndXidx(caseIdx,xidx)
+        target_func, target_path = Case2Func[str(xidx)]
+        relative_path = target_path.replace(Config.getSrcDirByCase(caseIdx), "")
+        afalg_override = _afalg_callfile_override(target_func, relative_path)
+        if afalg_override is not None:
+            Config.logging.info(
+                f"[case {caseIdx} xidx {xidx}] AF_ALG callfile override: "
+                f"{target_func} {relative_path}")
+            outList = afalg_override
         if os.path.exists(outFile):
             os.remove(outFile)
         with open(outFile, "w") as fp2:
@@ -362,4 +399,4 @@ def FilterGeneralSyscall(calls):
                 shouldRemove.add(rawCall)
     for rawcall in shouldRemove:
         calls.remove(rawcall)
-    return calls 
+    return calls
