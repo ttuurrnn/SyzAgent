@@ -71,6 +71,9 @@ def add_agent_args(parser):
                         dest="dist_stall_timeout",
                         help="Seconds of no dist_min improvement before early round termination "
                              "(default: 600=10min, 0=disabled)")
+    parser.add_argument("--seed-corpus", default=None, dest="seed_corpus",
+                        help="Path to a hand-crafted corpus.db to use as the "
+                             "initial seed (skips proactive-seed LLM generation).")
     parser.add_argument("--proactive-seed", action="store_true", default=False,
                         dest="proactive_seed",
                         help="LLM generates seed corpus from static dist analysis before Round 1")
@@ -139,6 +142,8 @@ Available dataset actions:
     p_new.add_argument("--linux-template", default=None)
     p_new.add_argument("--from-stage", default=None, dest="from_stage",
                         choices=PIPELINE_STAGES)
+    p_new.add_argument("--xi", type=int, default=0, dest="xi_start",
+                        help="Execution index for this fuzz instance (0=proactive, 1+=parallel variant)")
 
     # fuzz-only mode
     p_fuzz = sub.add_parser("fuzz", help="Fuzz pre-built targets only")
@@ -169,6 +174,7 @@ def build_agent_loop(layout, target_info, args):
         stall_timeout=args.stall_timeout,
         dist_stall_timeout=args.dist_stall_timeout,
         proactive_seed=args.proactive_seed,
+        seed_corpus=getattr(args, "seed_corpus", None),
     )
 
 

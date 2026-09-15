@@ -16,11 +16,21 @@ from case_registry import PREBUILT_TARGETS
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESOURCE_ROOT = os.path.dirname(SCRIPT_DIR)
+REPO_ROOT = os.path.abspath(os.path.join(RESOURCE_ROOT, "..", ".."))
+REPO_LOCAL_FUZZER_DIR = os.path.join(
+    REPO_ROOT, "deps", "SyzDirect", "source", "syzdirect", "syzdirect_fuzzer"
+)
 
 LLVM_ROOT = os.path.join(RESOURCE_ROOT, "..", "llvm-project-new")
 LLVM_BUILD = os.path.join(LLVM_ROOT, "build")
 CLANG_PATH = os.path.join(LLVM_BUILD, "bin", "clang")
-FUZZER_DIR = os.path.join(RESOURCE_ROOT, "syzdirect_fuzzer")
+_bundled_fuzzer_dir = os.path.join(RESOURCE_ROOT, "syzdirect_fuzzer")
+FUZZER_DIR = os.environ.get(
+    "SYZDIRECT_FUZZER_DIR",
+    REPO_LOCAL_FUZZER_DIR
+    if os.path.exists(os.path.join(REPO_LOCAL_FUZZER_DIR, "bin", "syz-manager"))
+    else _bundled_fuzzer_dir,
+)
 FUZZER_BIN = os.path.join(FUZZER_DIR, "bin")
 INTERFACE_GENERATOR = os.path.join(RESOURCE_ROOT, "syzdirect_function_model", "build", "lib", "interface_generator")
 TARGET_ANALYZER = os.path.join(RESOURCE_ROOT, "syzdirect_kernel_analysis", "build", "lib", "target_analyzer")
@@ -32,8 +42,10 @@ BIGCONFIG = os.path.join(RESOURCE_ROOT, "bigconfig")
 TEMPLATE_CONFIG = os.path.join(RESOURCE_ROOT, "template_config")
 KNOWN_CRASH_DB = os.path.join(SCRIPT_DIR, "known_crash_signatures.json")
 
-RUNTIME_BASE = os.environ.get("SYZDIRECT_RUNTIME", "/home/ai/syzdirect-runtime/cve")
-_vm_img_base = os.path.join(RUNTIME_BASE, "cve_cve_2025_68205/image-work")
+RUNTIME_BASE = os.environ.get(
+    "SYZDIRECT_RUNTIME", os.path.join(REPO_ROOT, ".runtime", "cve")
+)
+_vm_img_base = os.path.join(RUNTIME_BASE, "images")
 VM_IMAGE = os.environ.get(
     "SYZDIRECT_VM_IMAGE",
     # prefer qcow2 (supports -snapshot without raw-copy overhead); fall back to img
@@ -43,7 +55,7 @@ VM_IMAGE = os.environ.get(
 )
 SSH_KEY = os.environ.get(
     "SYZDIRECT_SSH_KEY",
-    os.path.join(RUNTIME_BASE, "cve_cve_2025_68205/image-work/bullseye.id_rsa"),
+    os.path.join(_vm_img_base, "bullseye.id_rsa"),
 )
 
 

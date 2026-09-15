@@ -1,4 +1,4 @@
-"""python -m syzagent 진입점"""
+"""python -m syzagent entry point"""
 
 from syzagent.cli import main
 

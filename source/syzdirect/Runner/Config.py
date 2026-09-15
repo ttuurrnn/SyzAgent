@@ -95,13 +95,19 @@ def PreparePathVariables():
     ################### resources provided by us ##################
     global KcovPatchPath,LLVMRootDir,LLVMBuildDir,ClangPath,BigConfigPath,TemplateConfigPath,FuzzerDir,FuzzerBinDir,SyzManagerPath,SyzTRMapPath,SyzFeaturePath
     ResourceRoot=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    RepoRoot=os.path.abspath(os.path.join(ResourceRoot,"..",".."))
+    RepoLocalFuzzerDir=os.path.join(RepoRoot,"deps","SyzDirect","source","syzdirect","syzdirect_fuzzer")
     KcovPatchPath=os.path.join(ResourceRoot,"kcov.diff")
     LLVMRootDir=os.path.join(ResourceRoot,"..","llvm-project-new")
     LLVMBuildDir=os.path.join(LLVMRootDir,"build")
     ClangPath=os.path.join(LLVMBuildDir,"bin/clang")
     BigConfigPath=os.path.join(ResourceRoot,"bigconfig")
     TemplateConfigPath=os.path.join(ResourceRoot,"template_config")
-    FuzzerDir=os.path.join(ResourceRoot,"syzdirect_fuzzer")
+    BundledFuzzerDir=os.path.join(ResourceRoot,"syzdirect_fuzzer")
+    FuzzerDir=os.environ.get(
+        "SYZDIRECT_FUZZER_DIR",
+        RepoLocalFuzzerDir if os.path.exists(os.path.join(RepoLocalFuzzerDir,"bin","syz-manager")) else BundledFuzzerDir,
+    )
     FuzzerBinDir=os.path.join(FuzzerDir,"bin")
     SyzManagerPath=os.path.join(FuzzerBinDir,"syz-manager")
     SyzTRMapPath=os.path.join(FuzzerBinDir,"direct")
@@ -175,8 +181,19 @@ def PreparePathVariables():
     
     ############### SET BY USER
     global CleanImageTemplatePath,KeyPath
-    CleanImageTemplatePath="/home/ai/syzdirect-runtime/cve/cve_cve_2025_68205/image-work/bullseye.img"
-    KeyPath="/home/ai/syzdirect-runtime/cve/cve_cve_2025_68205/image-work/bullseye.id_rsa"
+    RuntimeBase=os.environ.get(
+        "SYZDIRECT_RUNTIME",
+        os.path.join(RepoRoot,".runtime","cve"),
+    )
+    ImageDir=os.path.join(RuntimeBase,"images")
+    CleanImageTemplatePath=os.environ.get(
+        "SYZDIRECT_VM_IMAGE",
+        os.path.join(ImageDir,"bullseye.img"),
+    )
+    KeyPath=os.environ.get(
+        "SYZDIRECT_SSH_KEY",
+        os.path.join(ImageDir,"bullseye.id_rsa"),
+    )
     assert os.path.exists(CleanImageTemplatePath), "Please offer clean image path"
     assert os.path.exists(KeyPath), "Please offer key path"
     

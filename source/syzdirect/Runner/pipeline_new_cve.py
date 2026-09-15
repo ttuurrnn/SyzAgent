@@ -102,6 +102,39 @@ def ensure_commit_available(src_dir, commit, fetch_ref):
             sys.exit(f"[1/6] ERROR: commit not found on origin or kernel.org: {commit}")
 
 
+def _template_has_commit(template_dir, commit):
+    """Return True if the local template already has commit available."""
+    if not template_dir or not os.path.exists(os.path.join(template_dir, ".git")):
+        return False
+    return subprocess.run(
+        ["git", "-C", template_dir, "rev-parse", "--verify", f"{commit}^{{commit}}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode == 0
+
+
+def _prepare_source_from_template(template_dir, src_dir, commit):
+    """Create a source checkout from a local template.
+
+    Shallow local templates make `git clone --local` fall back to a slow object
+    copy. A detached worktree reuses the template object store and is much
+    faster for repeated target experiments.
+    """
+    if _template_has_commit(template_dir, commit):
+        print("  Creating worktree from local template...")
+        sh(f"cd {Q(template_dir)} && git worktree prune", check=False)
+        try:
+            sh(f"cd {Q(template_dir)} && git worktree add --detach {Q(src_dir)} {Q(commit)}")
+            return True
+        except subprocess.CalledProcessError:
+            print("  WARNING: git worktree add failed, falling back to clone")
+
+    print("  Cloning from local template...")
+    sh(f"git clone --local --no-checkout {Q(template_dir)} {Q(src_dir)}")
+    return True
+
+
 def ensure_target_function_info(path, function_name, file_path):
     """Make sure fuzzing has at least one target function entry."""
     if _file_exists_and_nonempty(path):
@@ -269,6 +302,22 @@ class NewCVEPipeline:
         self.safe_name = self.cve_id.replace("-", "_").lower()
         self.ci = 0  # single target = case 0
         self.layout = WorkdirLayout(args.workdir)
+        # Load CVE metadata written by batch_runner (kind, subject, fix_commit)
+        self.cve_kind = []
+        self.cve_subject = ""
+        self.fix_commit_sha = self.commit  # default: same as checkout commit
+        self.origin_commit = ""  # commit that introduced the (potentially buggy) code
+        _meta_path = os.path.join(args.workdir, "cve_meta.json")
+        if os.path.exists(_meta_path):
+            try:
+                import json as _json
+                _meta = _json.load(open(_meta_path))
+                self.cve_kind = _meta.get("kind", [])
+                self.cve_subject = _meta.get("subject", "")
+                self.fix_commit_sha = _meta.get("fix_commit", self.commit) or self.commit
+                self.origin_commit = _meta.get("origin_commit", "") or ""
+            except Exception:
+                pass
         self.state = {
             "mode": "new",
             "cve": self.cve_id,
@@ -352,13 +401,12 @@ class NewCVEPipeline:
         commit = self.commit
         fetch_ref = re.sub(r"[~^]\d*$", "", commit)
 
-        if os.path.isdir(os.path.join(src, ".git")):
+        if os.path.exists(os.path.join(src, ".git")):
             print(f"  Reusing: {src}")
         else:
             shutil.rmtree(src, ignore_errors=True)
             if self.linux_template and os.path.exists(self.linux_template):
-                print(f"  Cloning from local template...")
-                sh(f"git clone --local --no-checkout {Q(self.linux_template)} {Q(src)}")
+                _prepare_source_from_template(self.linux_template, src, commit)
             else:
                 print("  Cloning from GitHub...")
                 sh(f"git clone --depth=1 https://github.com/torvalds/linux.git {Q(src)}")
@@ -528,6 +576,11 @@ class NewCVEPipeline:
         dist = self.layout.dist_dir(ci, xidx)
         if not os.path.exists(dist):
             dist = self.layout.dist_dir(ci, 0)
+        # If dist dir has no .dist files, treat as no-distance mode (coverage-only).
+        if dist and os.path.isdir(dist):
+            if not any(f.endswith(".dist") for f in os.listdir(dist)):
+                print(f"  NOTE: {dist} has no .dist files — building without distance instrumentation")
+                dist = None
 
         src = self.layout.src(ci)
         temp = os.path.join(self.layout.kwithdist(ci), "temp_build")
@@ -577,8 +630,15 @@ class NewCVEPipeline:
                     allow_boot_fallback=(not self.boot_fallback_used),
                     stall_timeout=getattr(self.args, "stall_timeout", 1800),
                     dist_stall_timeout=getattr(self.args, "dist_stall_timeout", 600),
+                    seed_corpus=getattr(self.args, "seed_corpus", None),
                     proactive_seed=getattr(self.args, "proactive_seed", False),
+                    xi=getattr(self.args, "xi_start", 0),
                 )
+                # Inject CVE metadata for semantic validation
+                agent.fix_commit_sha = self.fix_commit_sha
+                agent.cve_kind = self.cve_kind
+                agent.cve_subject = self.cve_subject
+                agent.origin_commit = self.origin_commit
                 try:
                     agent.run()
                     break
@@ -599,7 +659,14 @@ class NewCVEPipeline:
         ci = self.ci
         os.makedirs(self.layout.fuzzinps(ci), exist_ok=True)
 
-        result = llm_analyze_cve(self.cve_id, self.commit, self.function, self.file_path)
+        src_root = self.layout.src(ci)
+        k2s_path = self.layout.k2s(ci)
+        result = llm_analyze_cve(
+            self.cve_id, self.commit, self.function, self.file_path,
+            src_root=src_root if os.path.isdir(src_root) else None,
+            fix_commit=self.commit or None,
+            k2s_path=k2s_path if os.path.isfile(k2s_path) else None,
+        )
         syscalls = (result.get("syscalls") if result else None) or guess_syscalls(self.file_path)
         syscalls = narrow_callfile_entries(
             syscalls,

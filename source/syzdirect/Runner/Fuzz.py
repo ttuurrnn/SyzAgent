@@ -197,6 +197,8 @@ def runFuzzer(fuzzerFile, configPath, callFile, log_dir=None, stall_timeout=0,
     os.makedirs(log_dir, exist_ok=True)
     manager_log = os.path.join(log_dir, "manager.log")
     metrics_jsonl = os.path.join(log_dir, "metrics.jsonl")
+    continue_after_target = os.environ.get(
+        "SYZDIRECT_CONTINUE_AFTER_TARGET", "").lower() in ("1", "true", "yes")
 
     with open(manager_log, "w") as log_f, open(metrics_jsonl, "w") as met_f:
         proc = subprocess.Popen(
@@ -249,6 +251,10 @@ def runFuzzer(fuzzerFile, configPath, callFile, log_dir=None, stall_timeout=0,
                     if cur_dist == 0 and best_dist_min is None:
                         pass  # ignore default 0 emitted before any exec
                     elif cur_dist == 0 and best_dist_min is not None:
+                        if continue_after_target:
+                            best_dist_min = 0
+                            last_dist_improvement_ts = time.time()
+                            continue
                         # Target reached — record time and terminate immediately
                         elapsed = time.time() - fuzz_start_ts
                         msg = (f"TARGET_REACHED: dist_min=0 after {elapsed:.1f}s "

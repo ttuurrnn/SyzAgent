@@ -2,7 +2,7 @@
 """
 SyzAgent CLI
 
-SyzDirect 분석 파이프라인을 실행하고, 실패를 분류하여 템플릿을 강화합니다.
+Runs the SyzDirect analysis pipeline and classifies failures to enhance templates.
 """
 
 import argparse
@@ -18,20 +18,20 @@ from syzagent.pipeline import SyzAgentPipeline
 def parse_args():
     parser = argparse.ArgumentParser(
         prog="syzagent",
-        description="SyzDirect 기반 커널 퍼징 에이전트 — R1/R2/R3 실패 자동 보완",
+        description="SyzDirect-based Kernel Fuzzing Agent — Automated R1/R2/R3/R4 failure mitigation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-예시:
-  # 분석 + 템플릿 생성
+Examples:
+  # Analysis + Template generation
   python -m syzagent --target target.json --kernel /path/to/linux
 
-  # 퍼징 로그로 실패 분류 후 템플릿 강화
+  # Triage fuzzing logs and enhance templates
   python -m syzagent --triage --log fuzz.log --templates templates.json
 
-  # 전체 파이프라인 (분석 → 거리 계산 → 템플릿 → 에이전트 루프)
+  # Full pipeline (Analyze → Distance → Template → Agent Loop)
   python -m syzagent --full --target target.json --kernel /path/to/linux
 
-  # 케이스 번호로 실행 (datasets 사용)
+  # Run by dataset case ID
   python -m syzagent --case 54
         """,
     )
@@ -40,46 +40,46 @@ def parse_args():
     mode.add_argument(
         "--analyze",
         action="store_true",
-        help="정적 분석만 실행 (syscall 식별 + 템플릿 생성)",
+        help="Run static analysis only (syscall identification + template generation)",
     )
     mode.add_argument(
         "--triage",
         action="store_true",
-        help="퍼징 로그 분석 → R1/R2/R3 실패 분류 + 템플릿 강화",
+        help="Analyze fuzzing logs → classify R1/R2/R3/R4 failures + enhance templates",
     )
     mode.add_argument(
         "--full",
         action="store_true",
-        help="전체 파이프라인: 분석 → 거리 계산 → 템플릿 → 에이전트 루프",
+        help="Full pipeline: Analyze → Distance → Template → Agent Loop",
     )
     mode.add_argument(
         "--case",
         type=int,
         metavar="CASE_ID",
-        help="SyzDirect 데이터셋 케이스 번호 실행 (예: --case 54)",
+        help="Run SyzDirect dataset case by ID (e.g., --case 54)",
     )
 
-    parser.add_argument("--target", metavar="JSON", help="target.json 경로")
-    parser.add_argument("--kernel", metavar="DIR", help="커널 소스 경로")
-    parser.add_argument("--log", metavar="LOG", help="퍼징 로그 파일 (--triage 전용)")
+    parser.add_argument("--target", metavar="JSON", help="Path to target.json")
+    parser.add_argument("--kernel", metavar="DIR", help="Path to kernel source")
+    parser.add_argument("--log", metavar="LOG", help="Fuzzing log file (for --triage)")
     parser.add_argument(
-        "--templates", metavar="JSON", help="템플릿 파일 (--triage 전용)"
+        "--templates", metavar="JSON", help="Template file (for --triage)"
     )
     parser.add_argument(
-        "--output", metavar="DIR", default="syzagent_output", help="출력 디렉토리"
+        "--output", metavar="DIR", default="syzagent_output", help="Output directory"
     )
     parser.add_argument(
         "--mode",
         choices=["baseline", "syzdirect", "agent-loop"],
         default="agent-loop",
-        help="퍼징 모드 (--case 전용, 기본값: agent-loop)",
+        help="Fuzzing mode (for --case, default: agent-loop)",
     )
     parser.add_argument(
         "--budget-hours",
         type=float,
         default=1.0,
         metavar="H",
-        help="퍼징 예산 (시간, 기본값: 1)",
+        help="Fuzzing budget in hours (default: 1)",
     )
 
     return parser.parse_args()

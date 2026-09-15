@@ -132,10 +132,14 @@ def ensure_kcov_support(src_dir):
         with open(header_path) as f:
             txt = f.read()
         updated = txt
-        # Update __sanitizer_cov_trace_pc prototype to accept distance arg
+        # __sanitizer_cov_trace_pc keeps its void(void) prototype: the LLVM
+        # SanitizerCoverage pass emits the call with no arguments.  Block
+        # distance is recorded by a separate kcov_mark_block(u32) call.
+        # Self-heal any tree previously mis-patched to give trace_pc a
+        # distance argument the pass never actually passes.
         updated = updated.replace(
-            "void __sanitizer_cov_trace_pc(void);",
-            "void __sanitizer_cov_trace_pc(u32 dt);")
+            "void __sanitizer_cov_trace_pc(u32 dt);",
+            "void __sanitizer_cov_trace_pc(void);")
         if "void notrace kcov_mark_block(u32 i);" not in updated:
             updated = updated.replace(
                 "void kcov_remote_stop(void);\n",
@@ -160,10 +164,26 @@ def ensure_kcov_support(src_dir):
                 "#define KCOV_WORDS_PER_CMP 4\n",
                 "#define KCOV_WORDS_PER_CMP 4\n\n#define DISTBLOCKSIZE 300\n")
 
+        # Self-heal: earlier versions mis-patched __sanitizer_cov_trace_pc to
+        # take a u32 distance argument, but the LLVM pass calls it with none —
+        # the kernel then read a garbage register as the distance and clobbered
+        # dt_area[0] (the per-program min distance) with it.  Distance belongs
+        # solely to kcov_mark_block().  Repair any kcov.c left in that state.
+        updated = updated.replace(
+            "void notrace __sanitizer_cov_trace_pc(u32 dt)\n",
+            "void notrace __sanitizer_cov_trace_pc(void)\n")
+        updated = updated.replace(
+            "\tdt_area = (u32 *)t->kcov_area;\n"
+            "\tif (dt < READ_ONCE(dt_area[0]))\n"
+            "\t\tWRITE_ONCE(dt_area[0], dt);\n"
+            "\tarea = (unsigned long *)(dt_area + DISTBLOCKSIZE);\n",
+            "\tdt_area = (u32 *)t->kcov_area;\n"
+            "\tarea = (unsigned long *)(dt_area + DISTBLOCKSIZE);\n")
+
         if "void notrace kcov_mark_block(u32 i)" not in updated:
             updated, count = re.subn(
                 r"void notrace __sanitizer_cov_trace_pc\(void\)\n\{.*?\n\}\nEXPORT_SYMBOL\(__sanitizer_cov_trace_pc\);\n",
-                """void notrace __sanitizer_cov_trace_pc(u32 dt)
+                """void notrace __sanitizer_cov_trace_pc(void)
 {
 \tstruct task_struct *t;
 \tunsigned long *area;
@@ -176,8 +196,6 @@ def ensure_kcov_support(src_dir):
 \t\treturn;
 
 \tdt_area = (u32 *)t->kcov_area;
-\tif (dt < READ_ONCE(dt_area[0]))
-\t\tWRITE_ONCE(dt_area[0], dt);
 \tarea = (unsigned long *)(dt_area + DISTBLOCKSIZE);
 \t/* The first 64-bit word is the number of subsequent PCs. */
 \tpos = READ_ONCE(area[0]) + 1;
@@ -367,14 +385,23 @@ def find_kconfig_for_file(src_dir, target_file):
 
 
 def append_build_config(config_path, boot_profile="default", target_configs=None):
-    """Disable sanitizers/debug-info and enable KCOV in a kernel .config."""
+    """Disable sanitizers/debug-info and enable KCOV in a kernel .config.
+
+    Set env SYZDIRECT_ENABLE_KASAN=1 to KEEP KASAN/UBSAN on (they were force-off
+    here to make the directed instrumentation simpler/faster, but without them
+    most UAF/OOB bugs trigger silently — memory just corrupts and the kernel
+    keeps going, which is why a multi-day fuzz can yield 0 crashes).
+    """
+    kasan_on = os.environ.get("SYZDIRECT_ENABLE_KASAN") == "1"
+    compile_test_on = os.environ.get("SYZDIRECT_COMPILE_TEST", "1") != "0"
+    kasan_stack_on = os.environ.get("SYZDIRECT_KASAN_STACK", "1") != "0"
     disabled = [
-        "CONFIG_KASAN", "CONFIG_KCSAN", "CONFIG_UBSAN",
         "CONFIG_HAVE_DEBUG_KMEMLEAK", "CONFIG_DEBUG_INFO",
         "CONFIG_DEBUG_INFO_REDUCED", "CONFIG_DEBUG_INFO_COMPRESSED",
         "CONFIG_DEBUG_INFO_SPLIT", "CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT",
         "CONFIG_DEBUG_INFO_DWARF4", "CONFIG_DEBUG_INFO_DWARF5",
         "CONFIG_GDB_SCRIPTS",
+        "CONFIG_WERROR",
         "CONFIG_FORTIFY_SOURCE",
         # clang 18 rejects 1E6L long-double literals in drivers/usb/dwc2/hcd_queue.c
         "CONFIG_USB_DWC2",
@@ -384,20 +411,89 @@ def append_build_config(config_path, boot_profile="default", target_configs=None
         # objtool is for unwinder validation only; not needed for fuzzing.
         "CONFIG_OBJTOOL",
         "CONFIG_STACK_VALIDATION",
+        # Directed net/sched runs do not need generic device discovery.  Several
+        # unrelated built-in device drivers also trip interface_generator's
+        # ConstantAggregate handling before fuzzing can start.
+        "CONFIG_BLK_DEV_LOOP",
+        "CONFIG_VGA_ARB",
+        "CONFIG_NVRAM",
+        "CONFIG_VIRTIO_CONSOLE",
+        "CONFIG_VT",
+        "CONFIG_VT_CONSOLE",
+        "CONFIG_VGA_CONSOLE",
+        "CONFIG_INPUT",
+        "CONFIG_INPUT_LEDS",
+        "CONFIG_INPUT_FF_MEMLESS",
+        "CONFIG_INPUT_SPARSEKMAP",
+        "CONFIG_INPUT_VIVALDIFMAP",
+        "CONFIG_INPUT_EVDEV",
+        "CONFIG_INPUT_KEYBOARD",
+        "CONFIG_INPUT_MOUSE",
+        "CONFIG_INPUT_JOYSTICK",
+        "CONFIG_INPUT_TABLET",
+        "CONFIG_INPUT_TOUCHSCREEN",
+        "CONFIG_INPUT_MISC",
+        "CONFIG_SERIO",
+        "CONFIG_SERIO_I8042",
+        "CONFIG_KEYBOARD_ATKBD",
+        "CONFIG_MOUSE_PS2",
+        "CONFIG_HID",
+        "CONFIG_HID_SUPPORT",
+        "CONFIG_AGP",
+        "CONFIG_HPET",
+        "CONFIG_HPET_TIMER",
+        "CONFIG_HPET_EMULATE_RTC",
+        "CONFIG_HPET_MMAP",
+        "CONFIG_RTC_CLASS",
+        "CONFIG_PPS",
+        "CONFIG_PTP_1588_CLOCK",
+        "CONFIG_I2C",
+        "CONFIG_POWER_SUPPLY",
+        "CONFIG_THERMAL",
+        "CONFIG_CPU_FREQ",
+        "CONFIG_PCMCIA",
+        "CONFIG_MACINTOSH_DRIVERS",
+        "CONFIG_HW_RANDOM",
+        "CONFIG_CDROM",
+        # Keep libata/SCSI available: syzkaller's qemu backend boots the
+        # shared qcow2 via -hda with root=/dev/sda.
+        "CONFIG_MD",
+        "CONFIG_BLK_DEV_DM",
+        "CONFIG_IO_URING",
     ]
     lines = [f"{c}=n" for c in disabled]
+    if not kasan_on:
+        lines.extend([f"{c}=n" for c in ("CONFIG_KASAN", "CONFIG_KCSAN", "CONFIG_UBSAN")])
     lines.extend([
         "",
         "CONFIG_DEBUG_INFO_NONE=y",
         "CONFIG_KCOV=y",
         "CONFIG_KCOV_ENABLE_COMPARISONS=y",
         "CONFIG_IP_VS=n",
-        "CONFIG_COMPILE_TEST=y",
+        "CONFIG_FRAME_WARN=4096",
     ])
+    lines.append("CONFIG_COMPILE_TEST=y" if compile_test_on else "CONFIG_COMPILE_TEST=n")
+    if kasan_on:
+        # KASAN inline = faster than outline; KASAN_STACK catches stack OOB.
+        # Coexists with the directed KCOV trace_pc instrumentation (upstream
+        # syzkaller runs both routinely). UBSAN catches integer/array UB.
+        lines.extend([
+            "",
+            "CONFIG_KASAN=y",
+            "CONFIG_KASAN_GENERIC=y",
+            "CONFIG_KASAN_INLINE=y",
+            "CONFIG_UBSAN=y",
+            "CONFIG_UBSAN_BOUNDS=y",
+            "CONFIG_UBSAN_SHIFT=y",
+        ])
+        lines.append("CONFIG_KASAN_STACK=y" if kasan_stack_on else "CONFIG_KASAN_STACK=n")
     if boot_profile == "boot_safe_x86":
         lines.extend(BOOT_SAFE_X86_OVERRIDES)
     if target_configs:
         lines.extend([""] + target_configs)
+        # Some target Kconfig dependencies/defaults can revive broad device
+        # subsystems during olddefconfig. Re-apply the net/sched pruning last.
+        lines.extend([""] + [f"{c}=n" for c in disabled])
     _append_unique_kconfig(config_path, lines)
 
 

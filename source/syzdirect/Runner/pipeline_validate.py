@@ -199,7 +199,7 @@ def validate_stage_output(stage, layout, ci):
 
     if stage == "source":
         src = layout.src(ci)
-        if not os.path.isdir(os.path.join(src, ".git")):
+        if not os.path.exists(os.path.join(src, ".git")):
             errors.append(f"Source tree missing: {src}")
         kcov_errors = check_kcov_source(src)
         errors.extend(kcov_errors)
@@ -234,19 +234,31 @@ def validate_stage_output(stage, layout, ci):
         tfinfo = layout.tfinfo(ci)
         if not os.path.exists(tfinfo):
             errors.append(f"target_functions_info.txt missing: {tfinfo}")
-        # Check dist files exist
+        # Check dist files — only required when CompactOutput has entries.
+        # Empty CompactOutput means target analyzer found no reachable paths,
+        # so no-distance mode is expected and valid.
+        compact_has_entries = False
+        if os.path.exists(compact):
+            try:
+                import json as _json
+                with open(compact) as _f:
+                    compact_has_entries = bool(_json.load(_f))
+            except Exception:
+                pass
         dist_dir = layout.dist_dir(ci, 0)
-        if os.path.isdir(dist_dir):
-            dist_count = sum(1 for f in os.listdir(dist_dir) if f.endswith(".dist"))
-            if dist_count == 0:
-                errors.append(f"No .dist files in {dist_dir}")
+        if compact_has_entries:
+            if os.path.isdir(dist_dir):
+                dist_count = sum(1 for f in os.listdir(dist_dir) if f.endswith(".dist"))
+                if dist_count == 0:
+                    errors.append(f"No .dist files in {dist_dir}")
+                else:
+                    print(f"  [validate] {dist_count} .dist files found")
+                    dist_errors = _check_dist_file_sanity(dist_dir)
+                    errors.extend(dist_errors)
             else:
-                print(f"  [validate] {dist_count} .dist files found")
-                # Sanity check: .dist files should have reasonable values
-                dist_errors = _check_dist_file_sanity(dist_dir)
-                errors.extend(dist_errors)
+                errors.append(f"Distance directory missing: {dist_dir}")
         else:
-            errors.append(f"Distance directory missing: {dist_dir}")
+            print(f"  [validate] CompactOutput empty — no-distance mode (coverage-guided only)")
 
     elif stage == "distance":
         bz = layout.bzimage(ci)
